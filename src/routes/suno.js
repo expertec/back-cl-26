@@ -11,6 +11,12 @@ sunoRouter.post("/callback", async (req, res) => {
   if (!taskId) return res.status(400).json({ ok: false, error: "Callback sin taskId." });
 
   try {
+    console.log("[suno/callback] received", {
+      taskId,
+      code: req.body?.code,
+      callbackType: req.body?.data?.callbackType
+    });
+
     const snap = await db.collection("musica").where("taskId", "==", taskId).limit(1).get();
     if (snap.empty) {
       return res.status(404).json({ ok: false, error: "No hay pedido para este taskId." });

@@ -15,6 +15,18 @@ app.use(
   })
 );
 app.use(express.json({ limit: "1mb" }));
+app.use((req, res, next) => {
+  const start = Date.now();
+  res.on("finish", () => {
+    console.log("[http]", {
+      method: req.method,
+      path: req.originalUrl,
+      status: res.statusCode,
+      ms: Date.now() - start
+    });
+  });
+  next();
+});
 
 app.get("/health", (_req, res) => {
   res.json({ ok: true, service: "cantalab-music-backend" });

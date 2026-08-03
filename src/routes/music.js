@@ -27,6 +27,12 @@ musicRouter.post("/request", async (req, res) => {
       updatedAt: FieldValue.serverTimestamp()
     });
 
+    console.log("[music/request] created", {
+      musicId: docRef.id,
+      phone: normalizePhone(data.phone),
+      title: data.title
+    });
+
     runMusicPipeline().catch((error) => {
       console.error("[music/request] pipeline trigger failed:", error);
     });

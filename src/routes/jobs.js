@@ -1,6 +1,6 @@
 import { Router } from "express";
 import { assertJobAccess } from "../utils/jobAuth.js";
-import { processReadyAudio, resetStuckMusic, runMusicPipeline, sendReadySongs } from "../jobs/musicPipeline.js";
+import { pollSunoResults, processReadyAudio, resetStuckMusic, runMusicPipeline, sendReadySongs } from "../jobs/musicPipeline.js";
 
 export const jobsRouter = Router();
 
@@ -11,6 +11,11 @@ jobsRouter.post("/pipeline", assertJobAccess, async (_req, res) => {
 
 jobsRouter.post("/clips", assertJobAccess, async (_req, res) => {
   const processed = await processReadyAudio();
+  res.json({ ok: true, processed });
+});
+
+jobsRouter.post("/poll-suno", assertJobAccess, async (_req, res) => {
+  const processed = await pollSunoResults();
   res.json({ ok: true, processed });
 });
 
