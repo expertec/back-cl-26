@@ -1,0 +1,30 @@
+{
+  "name": "cantalab-music-backend",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "src/server.js",
+  "scripts": {
+    "start": "node src/server.js",
+    "dev": "node --watch src/server.js"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "@ffmpeg-installer/ffmpeg": "latest",
+    "axios": "latest",
+    "cors": "latest",
+    "dotenv": "latest",
+    "express": "latest",
+    "ffmpeg-static": "latest",
+    "firebase-admin": "13.5.0",
+    "fluent-ffmpeg": "latest",
+    "node-cron": "latest",
+    "openai": "4.104.0",
+    "zod": "latest"
+  },
+  "overrides": {
+    "uuid": "11.1.1"
+  }
+}
