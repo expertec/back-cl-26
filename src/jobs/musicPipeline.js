@@ -133,7 +133,7 @@ export async function pollSunoResults(limit = 5) {
         updatedAt: FieldValue.serverTimestamp()
       });
 
-      if (sunoStatus === "SUCCESS" && audioUrl) {
+      if (["FIRST_SUCCESS", "SUCCESS"].includes(sunoStatus) && audioUrl) {
         const fullUrl = await persistFullAudio({
           musicId: doc.id,
           taskId: song.taskId,

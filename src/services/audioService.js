@@ -102,6 +102,8 @@ export async function persistFullAudio({ musicId, taskId, audioUrl }) {
   try {
     console.log("[audio] persisting full audio", { musicId, taskId, tmpFull });
     await downloadToFile(audioUrl, tmpFull);
+    const stats = fs.statSync(tmpFull);
+    console.log("[audio] full audio downloaded", { musicId, taskId, bytes: stats.size });
     return uploadAudioAndGetUrl(tmpFull, `musica/full/${musicId}-${taskId}.mp3`, "audio/mpeg");
   } finally {
     try {
