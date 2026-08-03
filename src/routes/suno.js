@@ -1,8 +1,7 @@
 import { Router } from "express";
 import { db, FieldValue } from "../firebase.js";
-import { persistFullAudio } from "../services/audioService.js";
 import { extractAudioUrlFromCallback, extractTaskIdFromCallback } from "../services/sunoService.js";
-import { processReadyAudio } from "../jobs/musicPipeline.js";
+import { persistSunoAudioResult, processReadyAudio } from "../jobs/musicPipeline.js";
 
 export const sunoRouter = Router();
 
@@ -27,30 +26,25 @@ sunoRouter.post("/callback", async (req, res) => {
 
     if (!audioUrl) {
       await doc.ref.update({
-        status: "Procesando musica",
         sunoCallbackReceivedAt: FieldValue.serverTimestamp(),
+        sunoCallbackType: req.body?.data?.callbackType || null,
         updatedAt: FieldValue.serverTimestamp()
       });
       return res.json({ ok: true, message: "Callback recibido sin audio final." });
     }
 
-    const fullUrl = await persistFullAudio({
-      musicId: doc.id,
+    const persisted = await persistSunoAudioResult(doc, {
       taskId,
-      audioUrl
+      audioUrl,
+      source: "callback",
+      rawCallback: req.body
     });
 
-    await doc.ref.update({
-      fullUrl,
-      status: "Audio listo",
-      sunoRawCallback: req.body,
-      sunoCallbackReceivedAt: FieldValue.serverTimestamp(),
-      updatedAt: FieldValue.serverTimestamp()
-    });
-
-    processReadyAudio(1).catch((error) => {
-      console.error("[suno/callback] clip trigger failed:", error);
-    });
+    if (persisted) {
+      processReadyAudio(1).catch((error) => {
+        console.error("[suno/callback] clip trigger failed:", error);
+      });
+    }
 
     return res.json({ ok: true });
   } catch (error) {

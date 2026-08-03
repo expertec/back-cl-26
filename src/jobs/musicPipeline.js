@@ -134,16 +134,11 @@ export async function pollSunoResults(limit = 5) {
       });
 
       if (["FIRST_SUCCESS", "SUCCESS"].includes(sunoStatus) && audioUrl) {
-        const fullUrl = await persistFullAudio({
-          musicId: doc.id,
+        await persistSunoAudioResult(doc, {
           taskId: song.taskId,
-          audioUrl
-        });
-
-        await moveStatus(doc.ref, "Audio listo", {
-          fullUrl,
-          sunoRecordInfo: details,
-          sunoPolledReadyAt: FieldValue.serverTimestamp()
+          audioUrl,
+          source: "poll",
+          recordInfo: details
         });
       } else if (
         ["CREATE_TASK_FAILED", "GENERATE_AUDIO_FAILED", "CALLBACK_EXCEPTION", "SENSITIVE_WORD_ERROR", "FAILED"].includes(
@@ -173,6 +168,65 @@ export async function pollSunoResults(limit = 5) {
   }
 
   return processed;
+}
+
+export async function persistSunoAudioResult(doc, { taskId, audioUrl, source, recordInfo, rawCallback }) {
+  const lock = await db.runTransaction(async (transaction) => {
+    const fresh = await transaction.get(doc.ref);
+    if (!fresh.exists) {
+      return { locked: false, reason: "missing-doc" };
+    }
+
+    const data = fresh.data();
+    if (data.fullUrl || ["Audio listo", "Generando clip", "Enviar musica", "Enviando musica", "Enviada"].includes(data.status)) {
+      return { locked: false, reason: `already-${data.status}` };
+    }
+
+    if (data.status !== "Procesando musica") {
+      return { locked: false, reason: `status-${data.status}` };
+    }
+
+    transaction.update(doc.ref, {
+      status: "Guardando audio",
+      audioPersistSource: source,
+      audioPersistStartedAt: FieldValue.serverTimestamp(),
+      updatedAt: FieldValue.serverTimestamp()
+    });
+
+    return { locked: true };
+  });
+
+  if (!lock.locked) {
+    console.log("[audio] persist skipped", {
+      musicId: doc.id,
+      taskId,
+      source,
+      reason: lock.reason
+    });
+    return false;
+  }
+
+  try {
+    const fullUrl = await persistFullAudio({
+      musicId: doc.id,
+      taskId,
+      audioUrl
+    });
+
+    await moveStatus(doc.ref, "Audio listo", {
+      fullUrl,
+      ...(recordInfo ? { sunoRecordInfo: recordInfo, sunoPolledReadyAt: FieldValue.serverTimestamp() } : {}),
+      ...(rawCallback ? { sunoRawCallback: rawCallback, sunoCallbackReceivedAt: FieldValue.serverTimestamp() } : {})
+    });
+
+    return true;
+  } catch (error) {
+    await moveStatus(doc.ref, "Procesando musica", {
+      audioPersistError: error.message,
+      audioPersistErrorAt: FieldValue.serverTimestamp()
+    });
+    throw error;
+  }
 }
 
 export async function processReadyAudio(limit = 3) {
@@ -274,7 +328,14 @@ export async function runMusicPipeline() {
 }
 
 export async function resetStuckMusic(thresholdMinutes = 30) {
-  const stuckStatuses = ["Generando letra", "Generando prompt", "Procesando musica", "Generando clip", "Enviando musica"];
+  const stuckStatuses = [
+    "Generando letra",
+    "Generando prompt",
+    "Procesando musica",
+    "Guardando audio",
+    "Generando clip",
+    "Enviando musica"
+  ];
   const snap = await db.collection(MUSIC_COLLECTION).where("status", "in", stuckStatuses).limit(20).get();
   const cutoff = Date.now() - thresholdMinutes * 60 * 1000;
   let reset = 0;
@@ -285,6 +346,7 @@ export async function resetStuckMusic(thresholdMinutes = 30) {
       data.lyricsProcessingStartedAt?.toDate?.()?.getTime?.() ||
       data.promptProcessingStartedAt?.toDate?.()?.getTime?.() ||
       data.musicProcessingStartedAt?.toDate?.()?.getTime?.() ||
+      data.audioPersistStartedAt?.toDate?.()?.getTime?.() ||
       data.clipProcessingStartedAt?.toDate?.()?.getTime?.() ||
       data.sendingStartedAt?.toDate?.()?.getTime?.() ||
       0;
@@ -298,7 +360,9 @@ export async function resetStuckMusic(thresholdMinutes = 30) {
           ? "Sin prompt"
           : data.status === "Procesando musica"
             ? "Sin musica"
-            : data.status === "Generando clip"
+            : data.status === "Guardando audio"
+              ? "Procesando musica"
+              : data.status === "Generando clip"
               ? "Audio listo"
               : "Enviar musica";
 

@@ -2,6 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import ffmpegInstaller from "@ffmpeg-installer/ffmpeg";
 import ffmpegStatic from "ffmpeg-static";
 import ffmpeg from "fluent-ffmpeg";
@@ -97,7 +98,7 @@ export async function persistFullAudio({ musicId, taskId, audioUrl }) {
   const tmpDir = config.tmpDir || os.tmpdir();
   fs.mkdirSync(tmpDir, { recursive: true });
 
-  const tmpFull = path.join(tmpDir, `${taskId}-full.mp3`);
+  const tmpFull = path.join(tmpDir, `${taskId}-${randomUUID()}-full.mp3`);
 
   try {
     console.log("[audio] persisting full audio", { musicId, taskId, tmpFull });
