@@ -50,12 +50,16 @@ function runFfmpeg(command) {
 export async function createWatermarkedClip({ musicId, fullUrl }) {
   configureFfmpeg();
 
-  const tmpFull = path.join(os.tmpdir(), `${musicId}-full.mp3`);
-  const tmpClip = path.join(os.tmpdir(), `${musicId}-clip.m4a`);
-  const tmpWatermark = path.join(os.tmpdir(), `${musicId}-watermark.mp3`);
-  const tmpFinal = path.join(os.tmpdir(), `${musicId}-watermarked.m4a`);
+  const tmpDir = config.tmpDir || os.tmpdir();
+  fs.mkdirSync(tmpDir, { recursive: true });
+
+  const tmpFull = path.join(tmpDir, `${musicId}-full.mp3`);
+  const tmpClip = path.join(tmpDir, `${musicId}-clip.m4a`);
+  const tmpWatermark = path.join(tmpDir, `${musicId}-watermark.mp3`);
+  const tmpFinal = path.join(tmpDir, `${musicId}-watermarked.m4a`);
 
   try {
+    console.log("[audio] creating clip", { musicId, tmpDir });
     await downloadToFile(fullUrl, tmpFull);
     await runFfmpeg(
       ffmpeg(tmpFull)
@@ -90,9 +94,13 @@ export async function createWatermarkedClip({ musicId, fullUrl }) {
 }
 
 export async function persistFullAudio({ musicId, taskId, audioUrl }) {
-  const tmpFull = path.join(os.tmpdir(), `${taskId}-full.mp3`);
+  const tmpDir = config.tmpDir || os.tmpdir();
+  fs.mkdirSync(tmpDir, { recursive: true });
+
+  const tmpFull = path.join(tmpDir, `${taskId}-full.mp3`);
 
   try {
+    console.log("[audio] persisting full audio", { musicId, taskId, tmpFull });
     await downloadToFile(audioUrl, tmpFull);
     return uploadAudioAndGetUrl(tmpFull, `musica/full/${musicId}-${taskId}.mp3`, "audio/mpeg");
   } finally {

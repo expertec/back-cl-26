@@ -38,5 +38,13 @@ app.use("/api/jobs", jobsRouter);
 
 app.listen(config.port, () => {
   console.log(`Cantalab backend listening on ${config.port}`);
+  console.log("[config]", {
+    publicBackendUrl: config.publicBackendUrl,
+    frontendOrigin: config.frontendOrigin,
+    tmpDir: config.tmpDir,
+    sunoBaseUrl: config.sunoBaseUrl,
+    hasFirebaseBucket: Boolean(config.firebaseStorageBucket),
+    hasKanwapSession: Boolean(config.kanwapSessionId)
+  });
   if (config.enableCron) startCron();
 });

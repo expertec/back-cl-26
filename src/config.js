@@ -11,6 +11,7 @@ export const config = {
   sunoBaseUrl: process.env.SUNO_BASE_URL || "https://api.sunoapi.org/api/v1",
   sunoModel: process.env.SUNO_MODEL || "V4_5ALL",
   publicBackendUrl: (process.env.PUBLIC_BACKEND_URL || "").replace(/\/$/, ""),
+  tmpDir: process.env.TMP_DIR || "/tmp/cantalab",
   firebaseStorageBucket: process.env.FIREBASE_STORAGE_BUCKET || "",
   firebaseServiceAccountPath: process.env.FIREBASE_SERVICE_ACCOUNT_PATH || "/etc/secrets/serviceAccountKey.json",
   firebaseServiceAccountJson: process.env.FIREBASE_SERVICE_ACCOUNT_JSON || "",
