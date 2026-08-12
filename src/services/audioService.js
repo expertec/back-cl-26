@@ -108,7 +108,7 @@ export async function createWatermarkedClip({ musicId, fullUrl, version = 1 }) {
         .output(tmpFinal)
     );
 
-    return uploadAudioAndGetUrl(tmpFinal, `musica/clip/${musicId}-v${version}-clip.m4a`, "audio/mp4");
+    return await uploadAudioAndGetUrl(tmpFinal, `musica/clip/${musicId}-v${version}-clip.m4a`, "audio/mp4");
   } finally {
     cleanupFiles([tmpFull, tmpClip, tmpWatermark, tmpFinal]);
     try {
@@ -130,7 +130,7 @@ export async function persistFullAudio({ musicId, taskId, audioUrl, version = 1 
     await downloadToFile(audioUrl, tmpFull);
     const stats = fs.statSync(tmpFull);
     console.log("[audio] full audio downloaded", { musicId, taskId, bytes: stats.size });
-    return uploadAudioAndGetUrl(tmpFull, `musica/full/${musicId}-${taskId}-v${version}.mp3`, "audio/mpeg");
+    return await uploadAudioAndGetUrl(tmpFull, `musica/full/${musicId}-${taskId}-v${version}.mp3`, "audio/mpeg");
   } finally {
     cleanupFiles([tmpFull, `${tmpFull}.part`]);
     try {
