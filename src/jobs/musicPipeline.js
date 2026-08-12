@@ -1,10 +1,13 @@
 import { db, FieldValue } from "../firebase.js";
+import { config } from "../config.js";
 import { createLyrics, createMusicPrompt } from "../services/openaiService.js";
 import { extractAudioUrlsFromRecordInfo, getSunoGenerationDetails, submitSunoSong } from "../services/sunoService.js";
 import { createWatermarkedClip, persistFullAudio } from "../services/audioService.js";
 import { sendSongWithKanwap } from "../services/kanwapService.js";
 
 const MUSIC_COLLECTION = "musica";
+const RETRYABLE_SUNO_FAILURES = new Set(["CREATE_TASK_FAILED", "GENERATE_AUDIO_FAILED", "CALLBACK_EXCEPTION", "FAILED"]);
+const TERMINAL_SUNO_FAILURES = new Set(["SENSITIVE_WORD_ERROR"]);
 
 async function getFirstByStatus(status, limit = 1) {
   return db.collection(MUSIC_COLLECTION).where("status", "==", status).limit(limit).get();
@@ -69,6 +72,59 @@ function getClipUrls(song) {
   return song.clipUrl ? [song.clipUrl] : [];
 }
 
+function getSunoErrorMessage(details, sunoStatus) {
+  return (
+    details?.errorMessage ||
+    details?.error ||
+    details?.response?.errorMessage ||
+    details?.response?.error ||
+    `Suno status: ${sunoStatus}`
+  );
+}
+
+function isRetryableErroredMusic(data) {
+  if (data.status !== "Error musica") return false;
+
+  const sunoStatus = data.sunoStatus || data.sunoFinalFailureStatus || data.lastSunoFailureStatus;
+  const attemptCount = Number(data.sunoAttemptCount || 1);
+
+  return RETRYABLE_SUNO_FAILURES.has(sunoStatus) && attemptCount < config.sunoMaxAttempts;
+}
+
+async function handleSunoFailure(doc, song, details, sunoStatus) {
+  const attemptCount = Number(song.sunoAttemptCount || 1);
+  const errorMsg = getSunoErrorMessage(details, sunoStatus);
+
+  if (TERMINAL_SUNO_FAILURES.has(sunoStatus) || attemptCount >= config.sunoMaxAttempts) {
+    await moveStatus(doc.ref, "Error musica", {
+      errorMsg,
+      errorAt: FieldValue.serverTimestamp(),
+      sunoRecordInfo: details,
+      sunoFinalFailureStatus: sunoStatus,
+      sunoFinalFailureAt: FieldValue.serverTimestamp()
+    });
+    return;
+  }
+
+  console.warn("[suno] transient failure, retrying", {
+    musicId: doc.id,
+    taskId: song.taskId,
+    sunoStatus,
+    attemptCount,
+    maxAttempts: config.sunoMaxAttempts,
+    errorMsg
+  });
+
+  await moveStatus(doc.ref, "Sin musica", {
+    errorMsg: `Reintentando Suno por ${sunoStatus}`,
+    lastSunoFailureStatus: sunoStatus,
+    lastSunoFailureMessage: errorMsg,
+    lastSunoFailureAt: FieldValue.serverTimestamp(),
+    previousTaskIds: FieldValue.arrayUnion(song.taskId),
+    sunoRecordInfo: details
+  });
+}
+
 async function processLyrics() {
   const snap = await getFirstByStatus("Sin letra");
   if (snap.empty) return 0;
@@ -128,10 +184,16 @@ async function processPrompt() {
 }
 
 async function processSunoSubmission() {
-  const snap = await getFirstByStatus("Sin musica");
+  const snap = await getFirstByStatuses(["Sin musica", "Error musica"], 10);
   if (snap.empty) return 0;
 
-  const doc = snap.docs[0];
+  const doc = snap.docs.find((candidate) => {
+    const data = candidate.data();
+    return data.status === "Sin musica" || isRetryableErroredMusic(data);
+  });
+
+  if (!doc) return 0;
+
   console.log("[pipeline] submitting to suno", { id: doc.id });
   await moveStatus(doc.ref, "Procesando musica", {
     musicProcessingStartedAt: FieldValue.serverTimestamp()
@@ -143,7 +205,11 @@ async function processSunoSubmission() {
 
     await moveStatus(doc.ref, "Procesando musica", {
       taskId,
-      taskSubmittedAt: FieldValue.serverTimestamp()
+      taskSubmittedAt: FieldValue.serverTimestamp(),
+      sunoAttemptCount: FieldValue.increment(1),
+      errorMsg: FieldValue.delete(),
+      sunoPollError: FieldValue.delete(),
+      audioPersistError: FieldValue.delete()
     });
     return 1;
   } catch (error) {
@@ -190,16 +256,8 @@ export async function pollSunoResults(limit = 5) {
           source: "poll",
           recordInfo: details
         });
-      } else if (
-        ["CREATE_TASK_FAILED", "GENERATE_AUDIO_FAILED", "CALLBACK_EXCEPTION", "SENSITIVE_WORD_ERROR", "FAILED"].includes(
-          sunoStatus
-        )
-      ) {
-        await moveStatus(doc.ref, "Error musica", {
-          errorMsg: details?.errorMessage || `Suno status: ${sunoStatus}`,
-          errorAt: FieldValue.serverTimestamp(),
-          sunoRecordInfo: details
-        });
+      } else if (RETRYABLE_SUNO_FAILURES.has(sunoStatus) || TERMINAL_SUNO_FAILURES.has(sunoStatus)) {
+        await handleSunoFailure(doc, song, details, sunoStatus);
       }
 
       processed += 1;

@@ -24,10 +24,23 @@ sunoRouter.post("/callback", async (req, res) => {
     const doc = snap.docs[0];
     const audioUrls = extractAudioUrlsFromCallback(req.body);
     const callbackType = String(req.body?.data?.callbackType || "");
+    const callbackCode = Number(req.body?.code || 0);
     const normalizedCallbackType = callbackType.toUpperCase();
     const isPartialCallback = normalizedCallbackType.includes("FIRST");
     const isCompleteCallback =
       (normalizedCallbackType.includes("COMPLETE") || normalizedCallbackType.includes("SUCCESS")) && !isPartialCallback;
+
+    if (callbackCode && callbackCode !== 200 && !audioUrls.length) {
+      await doc.ref.update({
+        sunoCallbackReceivedAt: FieldValue.serverTimestamp(),
+        sunoCallbackType: callbackType || null,
+        sunoCallbackCode: callbackCode,
+        sunoCallbackError: req.body?.msg || req.body?.message || "Suno callback sin audio.",
+        sunoRawFailureCallback: req.body,
+        updatedAt: FieldValue.serverTimestamp()
+      });
+      return res.json({ ok: true, message: "Callback de fallo recibido; poll decidirá reintento." });
+    }
 
     if (!audioUrls.length || (audioUrls.length < 2 && !isCompleteCallback)) {
       await doc.ref.update({
