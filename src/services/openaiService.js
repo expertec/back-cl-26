@@ -56,6 +56,43 @@ Reglas:
   return lyrics;
 }
 
+export async function reviseLyrics({ song, currentLyrics, revisionInstruction }) {
+  const prompt = `
+Corrige la letra de cancion personalizada aplicando solo esta instruccion del cliente:
+
+${revisionInstruction}
+
+Datos del pedido:
+- Titulo sugerido: ${song.title}
+- Ocasion: ${song.occasion}
+- Nombre a incluir: ${song.recipientName}
+- Historia/anecdotas: ${song.story}
+- Estado emocional: ${song.mood}
+
+Letra actual:
+${currentLyrics}
+
+Reglas:
+- Mantén la estructura cantable.
+- No expliques los cambios.
+- Responde solo con la letra corregida.
+  `.trim();
+
+  const response = await getClient().chat.completions.create({
+    model: config.openaiModel,
+    messages: [
+      { role: "system", content: "Eres un compositor experto ajustando letras personalizadas." },
+      { role: "user", content: prompt }
+    ],
+    temperature: 0.65,
+    max_tokens: 800
+  });
+
+  const lyrics = response.choices[0]?.message?.content?.trim();
+  if (!lyrics) throw new Error("OpenAI no devolvio letra revisada.");
+  return lyrics;
+}
+
 export async function createMusicPrompt(song) {
   const artistReference = song.referenceArtist || "artistas populares del genero";
   const prompt = `
@@ -93,4 +130,21 @@ Restricciones:
   if (!stylePrompt) throw new Error("OpenAI no devolvio prompt musical.");
   if (stylePrompt.length > 120) stylePrompt = `${stylePrompt.slice(0, 117)}...`;
   return stylePrompt;
+}
+
+export async function createJsonChatCompletion({ system, user, temperature = 0.2, maxTokens = 400 }) {
+  const response = await getClient().chat.completions.create({
+    model: config.openaiModel,
+    messages: [
+      { role: "system", content: system },
+      { role: "user", content: typeof user === "string" ? user : JSON.stringify(user) }
+    ],
+    temperature,
+    max_tokens: maxTokens,
+    response_format: { type: "json_object" }
+  });
+
+  const content = response.choices[0]?.message?.content?.trim();
+  if (!content) throw new Error("OpenAI no devolvio JSON.");
+  return JSON.parse(content);
 }

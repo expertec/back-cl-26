@@ -3,7 +3,7 @@ import { config } from "../config.js";
 import { createLyrics, createMusicPrompt } from "../services/openaiService.js";
 import { extractAudioUrlsFromRecordInfo, getSunoGenerationDetails, submitSunoSong } from "../services/sunoService.js";
 import { createWatermarkedClip, persistFullAudio } from "../services/audioService.js";
-import { sendSongWithKanwap } from "../services/kanwapService.js";
+import { sendSongWithWhatsapp } from "../services/whatsappDeliveryService.js";
 
 const MUSIC_COLLECTION = "musica";
 const RETRYABLE_SUNO_FAILURES = new Set(["CREATE_TASK_FAILED", "GENERATE_AUDIO_FAILED", "CALLBACK_EXCEPTION", "FAILED"]);
@@ -442,7 +442,7 @@ export async function sendReadySongs(limit = 3) {
     });
 
     try {
-      const delivery = await sendSongWithKanwap(song);
+      const delivery = await sendSongWithWhatsapp(song);
 
       await moveStatus(doc.ref, "Enviada", {
         sentAt: FieldValue.serverTimestamp(),

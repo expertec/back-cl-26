@@ -4,6 +4,8 @@ import { config } from "./config.js";
 import { musicRouter } from "./routes/music.js";
 import { sunoRouter } from "./routes/suno.js";
 import { jobsRouter } from "./routes/jobs.js";
+import { whatsappRouter } from "./routes/whatsapp.js";
+import { adminRouter } from "./routes/admin.js";
 import { startCron } from "./jobs/cron.js";
 
 const app = express();
@@ -35,6 +37,8 @@ app.get("/health", (_req, res) => {
 app.use("/api/music", musicRouter);
 app.use("/api/suno", sunoRouter);
 app.use("/api/jobs", jobsRouter);
+app.use("/api/whatsapp", whatsappRouter);
+app.use("/api/admin", adminRouter);
 
 app.listen(config.port, () => {
   console.log(`Cantalab backend listening on ${config.port}`);
