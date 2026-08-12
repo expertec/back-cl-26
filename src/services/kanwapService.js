@@ -2,6 +2,9 @@ import { config } from "../config.js";
 import { normalizePhone } from "../schemas.js";
 
 const KANWAP_TIMEOUT_MS = 35000;
+const KANWAP_AUDIO_TIMEOUT_MS = 120000;
+const AUDIO_BASE64_TIMEOUT_MS = 60000;
+const MAX_AUDIO_BYTES = 15 * 1024 * 1024;
 const SEND_RETRY_DELAYS_MS = [1500, 3500, 7000];
 
 function requireKanwapConfig() {
@@ -23,12 +26,13 @@ function buildKanwapUrl(path) {
 async function kanwapFetch(path, options = {}) {
   requireKanwapConfig();
 
+  const { timeoutMs = KANWAP_TIMEOUT_MS, ...fetchOptions } = options;
   const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), KANWAP_TIMEOUT_MS);
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
 
   try {
     const response = await fetch(buildKanwapUrl(path), {
-      ...options,
+      ...fetchOptions,
       signal: controller.signal,
       headers: {
         "X-API-Key": config.kanwapApiKey,
@@ -42,11 +46,16 @@ async function kanwapFetch(path, options = {}) {
     if (response.status === 409 && payload.enCurso) {
       const error = new Error(payload.mensaje || "Mensaje KanWap en curso.");
       error.enCurso = true;
+      error.status = response.status;
+      error.payload = payload;
       throw error;
     }
 
     if (!response.ok || payload.exito === false) {
-      throw new Error(payload.mensaje || `KanWap respondio HTTP ${response.status}.`);
+      const error = new Error(payload.mensaje || `KanWap respondio HTTP ${response.status}.`);
+      error.status = response.status;
+      error.payload = payload;
+      throw error;
     }
 
     return payload;
@@ -61,13 +70,14 @@ function sleep(ms) {
   });
 }
 
-async function sendWithRetry(path, body) {
+async function sendWithRetry(path, body, { timeoutMs = KANWAP_TIMEOUT_MS } = {}) {
   let lastError;
 
   for (let attempt = 0; attempt <= SEND_RETRY_DELAYS_MS.length; attempt += 1) {
     try {
       return await kanwapFetch(path, {
         method: "POST",
+        timeoutMs,
         body: JSON.stringify(body)
       });
     } catch (error) {
@@ -100,12 +110,36 @@ export async function sendKanwapText({ phone, message, idempotencyKey }) {
 }
 
 export async function sendKanwapAudio({ phone, audioUrl, idempotencyKey }) {
-  return sendWithRetry("/api/v1/enviar/audio", {
+  const body = {
     sesionId: config.kanwapSessionId,
     destino: normalizePhone(phone),
     audio: audioUrl,
     ...(idempotencyKey ? { idempotencyKey } : {})
-  });
+  };
+
+  try {
+    return await sendWithRetry("/api/v1/enviar/audio", body, { timeoutMs: KANWAP_AUDIO_TIMEOUT_MS });
+  } catch (error) {
+    if (error.name === "AbortError" || error.enCurso) {
+      throw error;
+    }
+
+    console.warn("[kanwap] audio URL send failed, retrying with base64", {
+      status: error.status || null,
+      message: error.message,
+      idempotencyKey
+    });
+
+    const dataUri = await downloadAudioAsDataUri(audioUrl);
+    return sendWithRetry(
+      "/api/v1/enviar/audio",
+      {
+        ...body,
+        audio: dataUri
+      },
+      { timeoutMs: KANWAP_AUDIO_TIMEOUT_MS }
+    );
+  }
 }
 
 export async function sendSongWithKanwap(song) {
@@ -176,4 +210,28 @@ function getClipUrls(song) {
   }
 
   return song.clipUrl ? [song.clipUrl] : [];
+}
+
+async function downloadAudioAsDataUri(audioUrl) {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), AUDIO_BASE64_TIMEOUT_MS);
+
+  try {
+    const response = await fetch(audioUrl, { signal: controller.signal });
+    if (!response.ok) {
+      throw new Error(`No se pudo descargar audio para Base64. HTTP ${response.status}`);
+    }
+
+    const contentType = response.headers.get("content-type") || "audio/mp4";
+    const buffer = Buffer.from(await response.arrayBuffer());
+
+    if (!buffer.length) throw new Error("Audio Base64 vacio.");
+    if (buffer.length > MAX_AUDIO_BYTES) {
+      throw new Error(`Audio demasiado grande para KanWap Base64: ${buffer.length} bytes.`);
+    }
+
+    return `data:${contentType};base64,${buffer.toString("base64")}`;
+  } finally {
+    clearTimeout(timeout);
+  }
 }

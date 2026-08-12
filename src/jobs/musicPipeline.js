@@ -10,6 +10,10 @@ async function getFirstByStatus(status, limit = 1) {
   return db.collection(MUSIC_COLLECTION).where("status", "==", status).limit(limit).get();
 }
 
+async function getFirstByStatuses(statuses, limit = 1) {
+  return db.collection(MUSIC_COLLECTION).where("status", "in", statuses).limit(limit).get();
+}
+
 async function moveStatus(ref, status, extra = {}) {
   await ref.update({
     status,
@@ -352,7 +356,7 @@ export async function processReadyAudio(limit = 3) {
 }
 
 export async function sendReadySongs(limit = 3) {
-  const snap = await getFirstByStatus("Enviar musica", limit);
+  const snap = await getFirstByStatuses(["Enviar musica", "Error envio"], limit);
   if (snap.empty) return 0;
 
   let processed = 0;
@@ -360,6 +364,11 @@ export async function sendReadySongs(limit = 3) {
   for (const doc of snap.docs) {
     const song = { id: doc.id, ...doc.data() };
     const clipUrls = getClipUrls(song);
+    const sendAttemptCount = Number(song.sendAttemptCount || 0);
+
+    if (song.status === "Error envio" && sendAttemptCount >= 3) {
+      continue;
+    }
 
     if (!song.leadPhone || !song.lyrics || !clipUrls.length) {
       await moveStatus(doc.ref, "Error envio", {
@@ -370,7 +379,8 @@ export async function sendReadySongs(limit = 3) {
     }
 
     await moveStatus(doc.ref, "Enviando musica", {
-      sendingStartedAt: FieldValue.serverTimestamp()
+      sendingStartedAt: FieldValue.serverTimestamp(),
+      sendAttemptCount: FieldValue.increment(1)
     });
 
     try {
@@ -381,6 +391,13 @@ export async function sendReadySongs(limit = 3) {
         delivery
       });
     } catch (error) {
+      console.error("[music] send error", {
+        musicId: doc.id,
+        leadPhone: song.leadPhone,
+        message: error.message,
+        status: error.status || null,
+        payload: error.payload || null
+      });
       await moveStatus(doc.ref, "Error envio", {
         errorMsg: error.message,
         errorAt: FieldValue.serverTimestamp()
