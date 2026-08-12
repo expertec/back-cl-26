@@ -1,30 +1,84 @@
 import { config } from "../config.js";
 import { normalizePhone } from "../schemas.js";
 
+const KANWAP_TIMEOUT_MS = 35000;
+const SEND_RETRY_DELAYS_MS = [1500, 3500, 7000];
+
 function requireKanwapConfig() {
   if (!config.kanwapApiKey) throw new Error("Falta KANWAP_API_KEY.");
   if (!config.kanwapSessionId) throw new Error("Falta KANWAP_SESION_ID.");
 }
 
+function buildKanwapUrl(path) {
+  const baseUrl = config.kanwapApiUrl.replace(/\/+$/, "");
+  const apiPath = path.startsWith("/api/v1/") ? path : `/api/v1${path.startsWith("/") ? path : `/${path}`}`;
+
+  if (baseUrl.endsWith("/api/v1")) {
+    return `${baseUrl}${apiPath.replace(/^\/api\/v1/, "")}`;
+  }
+
+  return `${baseUrl}${apiPath}`;
+}
+
 async function kanwapFetch(path, options = {}) {
   requireKanwapConfig();
 
-  const response = await fetch(`${config.kanwapApiUrl}${path}`, {
-    ...options,
-    headers: {
-      "X-API-Key": config.kanwapApiKey,
-      "Content-Type": "application/json",
-      ...(options.headers || {})
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), KANWAP_TIMEOUT_MS);
+
+  try {
+    const response = await fetch(buildKanwapUrl(path), {
+      ...options,
+      signal: controller.signal,
+      headers: {
+        "X-API-Key": config.kanwapApiKey,
+        "Content-Type": "application/json",
+        ...(options.headers || {})
+      }
+    });
+
+    const payload = await response.json().catch(() => ({}));
+
+    if (response.status === 409 && payload.enCurso) {
+      const error = new Error(payload.mensaje || "Mensaje KanWap en curso.");
+      error.enCurso = true;
+      throw error;
     }
+
+    if (!response.ok || payload.exito === false) {
+      throw new Error(payload.mensaje || `KanWap respondio HTTP ${response.status}.`);
+    }
+
+    return payload;
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+function sleep(ms) {
+  return new Promise((resolve) => {
+    setTimeout(resolve, ms);
   });
+}
 
-  const payload = await response.json().catch(() => ({}));
+async function sendWithRetry(path, body) {
+  let lastError;
 
-  if (!response.ok || payload.exito === false) {
-    throw new Error(payload.mensaje || `KanWap respondio HTTP ${response.status}.`);
+  for (let attempt = 0; attempt <= SEND_RETRY_DELAYS_MS.length; attempt += 1) {
+    try {
+      return await kanwapFetch(path, {
+        method: "POST",
+        body: JSON.stringify(body)
+      });
+    } catch (error) {
+      lastError = error;
+      const canRetry = error.name === "AbortError" || error.enCurso;
+      if (!canRetry || attempt === SEND_RETRY_DELAYS_MS.length) break;
+      await sleep(SEND_RETRY_DELAYS_MS[attempt]);
+    }
   }
 
-  return payload;
+  throw lastError;
 }
 
 export async function verifyKanwapSession() {
@@ -36,25 +90,21 @@ export async function verifyKanwapSession() {
   return payload.datos;
 }
 
-export async function sendKanwapText({ phone, message }) {
-  return kanwapFetch("/api/v1/enviar/texto", {
-    method: "POST",
-    body: JSON.stringify({
-      sesionId: config.kanwapSessionId,
-      destino: normalizePhone(phone),
-      mensaje: message
-    })
+export async function sendKanwapText({ phone, message, idempotencyKey }) {
+  return sendWithRetry("/api/v1/enviar/texto", {
+    sesionId: config.kanwapSessionId,
+    destino: normalizePhone(phone),
+    mensaje: message,
+    ...(idempotencyKey ? { idempotencyKey } : {})
   });
 }
 
-export async function sendKanwapAudio({ phone, audioUrl }) {
-  return kanwapFetch("/api/v1/enviar/audio", {
-    method: "POST",
-    body: JSON.stringify({
-      sesionId: config.kanwapSessionId,
-      destino: normalizePhone(phone),
-      audio: audioUrl
-    })
+export async function sendKanwapAudio({ phone, audioUrl, idempotencyKey }) {
+  return sendWithRetry("/api/v1/enviar/audio", {
+    sesionId: config.kanwapSessionId,
+    destino: normalizePhone(phone),
+    audio: audioUrl,
+    ...(idempotencyKey ? { idempotencyKey } : {})
   });
 }
 
@@ -79,12 +129,14 @@ export async function sendSongWithKanwap(song) {
 
   const textResult = await sendKanwapText({
     phone: song.leadPhone,
-    message: lyricsMessage
+    message: lyricsMessage,
+    idempotencyKey: `${song.id}-lyrics`
   });
 
   await sendKanwapText({
     phone: song.leadPhone,
-    message: intro
+    message: intro,
+    idempotencyKey: `${song.id}-intro`
   });
 
   const audioResults = [];
@@ -93,13 +145,15 @@ export async function sendSongWithKanwap(song) {
     if (clipUrls.length > 1) {
       await sendKanwapText({
         phone: song.leadPhone,
-        message: `Version ${index + 1}:`
+        message: `Version ${index + 1}:`,
+        idempotencyKey: `${song.id}-version-${index + 1}-label`
       });
     }
 
     const audioResult = await sendKanwapAudio({
       phone: song.leadPhone,
-      audioUrl: clipUrl
+      audioUrl: clipUrl,
+      idempotencyKey: `${song.id}-clip-${index + 1}`
     });
 
     audioResults.push(audioResult);
