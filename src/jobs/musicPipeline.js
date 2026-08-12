@@ -1,6 +1,6 @@
 import { db, FieldValue } from "../firebase.js";
 import { createLyrics, createMusicPrompt } from "../services/openaiService.js";
-import { extractAudioUrlFromRecordInfo, getSunoGenerationDetails, submitSunoSong } from "../services/sunoService.js";
+import { extractAudioUrlsFromRecordInfo, getSunoGenerationDetails, submitSunoSong } from "../services/sunoService.js";
 import { createWatermarkedClip, persistFullAudio } from "../services/audioService.js";
 import { sendSongWithKanwap } from "../services/kanwapService.js";
 
@@ -17,6 +17,52 @@ async function moveStatus(ref, status, extra = {}) {
     ...extra
   });
   console.log("[music] status", { id: ref.id, status });
+}
+
+function getStartedAtForStatus(data) {
+  const startedAtByStatus = {
+    "Generando letra": data.lyricsProcessingStartedAt,
+    "Generando prompt": data.promptProcessingStartedAt,
+    "Procesando musica": data.musicProcessingStartedAt,
+    "Guardando audio": data.audioPersistStartedAt,
+    "Generando clip": data.clipProcessingStartedAt,
+    "Enviando musica": data.sendingStartedAt
+  };
+
+  return startedAtByStatus[data.status]?.toDate?.()?.getTime?.() || 0;
+}
+
+function normalizeFullVersions(song) {
+  if (Array.isArray(song.fullVersions) && song.fullVersions.length) {
+    return song.fullVersions
+      .filter((item) => item?.fullUrl)
+      .map((item, index) => ({
+        version: Number(item.version || index + 1),
+        fullUrl: item.fullUrl
+      }))
+      .slice(0, 2);
+  }
+
+  if (Array.isArray(song.fullUrls) && song.fullUrls.length) {
+    return song.fullUrls
+      .filter(Boolean)
+      .map((fullUrl, index) => ({ version: index + 1, fullUrl }))
+      .slice(0, 2);
+  }
+
+  return song.fullUrl ? [{ version: 1, fullUrl: song.fullUrl }] : [];
+}
+
+function getClipUrls(song) {
+  if (Array.isArray(song.clipVersions) && song.clipVersions.length) {
+    return song.clipVersions.map((item) => item?.clipUrl).filter(Boolean).slice(0, 2);
+  }
+
+  if (Array.isArray(song.clipUrls) && song.clipUrls.length) {
+    return song.clipUrls.filter(Boolean).slice(0, 2);
+  }
+
+  return song.clipUrl ? [song.clipUrl] : [];
 }
 
 async function processLyrics() {
@@ -118,13 +164,13 @@ export async function pollSunoResults(limit = 5) {
     try {
       const details = await getSunoGenerationDetails(song.taskId);
       const sunoStatus = details?.status || "UNKNOWN";
-      const audioUrl = extractAudioUrlFromRecordInfo(details);
+      const audioUrls = extractAudioUrlsFromRecordInfo(details);
 
       console.log("[suno] poll", {
         musicId: doc.id,
         taskId: song.taskId,
         sunoStatus,
-        hasAudio: Boolean(audioUrl)
+        audioCount: audioUrls.length
       });
 
       await doc.ref.update({
@@ -133,10 +179,10 @@ export async function pollSunoResults(limit = 5) {
         updatedAt: FieldValue.serverTimestamp()
       });
 
-      if (["FIRST_SUCCESS", "SUCCESS"].includes(sunoStatus) && audioUrl) {
+      if ((sunoStatus === "SUCCESS" && audioUrls.length > 0) || (sunoStatus === "FIRST_SUCCESS" && audioUrls.length >= 2)) {
         await persistSunoAudioResult(doc, {
           taskId: song.taskId,
-          audioUrl,
+          audioUrls,
           source: "poll",
           recordInfo: details
         });
@@ -170,7 +216,9 @@ export async function pollSunoResults(limit = 5) {
   return processed;
 }
 
-export async function persistSunoAudioResult(doc, { taskId, audioUrl, source, recordInfo, rawCallback }) {
+export async function persistSunoAudioResult(doc, { taskId, audioUrl, audioUrls, source, recordInfo, rawCallback }) {
+  const sourceAudioUrls = Array.isArray(audioUrls) && audioUrls.length ? audioUrls.slice(0, 2) : [audioUrl].filter(Boolean);
+
   const lock = await db.runTransaction(async (transaction) => {
     const fresh = await transaction.get(doc.ref);
     if (!fresh.exists) {
@@ -178,7 +226,7 @@ export async function persistSunoAudioResult(doc, { taskId, audioUrl, source, re
     }
 
     const data = fresh.data();
-    if (data.fullUrl || ["Audio listo", "Generando clip", "Enviar musica", "Enviando musica", "Enviada"].includes(data.status)) {
+    if (data.fullUrl || data.fullUrls?.length || ["Audio listo", "Generando clip", "Enviar musica", "Enviando musica", "Enviada"].includes(data.status)) {
       return { locked: false, reason: `already-${data.status}` };
     }
 
@@ -207,14 +255,32 @@ export async function persistSunoAudioResult(doc, { taskId, audioUrl, source, re
   }
 
   try {
-    const fullUrl = await persistFullAudio({
-      musicId: doc.id,
-      taskId,
-      audioUrl
-    });
+    if (!sourceAudioUrls.length) throw new Error("Suno no devolvio audio final.");
+
+    const fullVersions = [];
+
+    for (const [index, sourceAudioUrl] of sourceAudioUrls.entries()) {
+      const version = index + 1;
+      const fullUrl = await persistFullAudio({
+        musicId: doc.id,
+        taskId,
+        audioUrl: sourceAudioUrl,
+        version
+      });
+
+      fullVersions.push({ version, fullUrl });
+    }
+
+    const fullUrls = fullVersions.map((item) => item.fullUrl);
 
     await moveStatus(doc.ref, "Audio listo", {
-      fullUrl,
+      fullUrl: fullUrls[0],
+      fullUrls,
+      fullVersions,
+      audioVersionCount: fullVersions.length,
+      audioPersistCompletedAt: FieldValue.serverTimestamp(),
+      audioPersistError: FieldValue.delete(),
+      sunoPollError: FieldValue.delete(),
       ...(recordInfo ? { sunoRecordInfo: recordInfo, sunoPolledReadyAt: FieldValue.serverTimestamp() } : {}),
       ...(rawCallback ? { sunoRawCallback: rawCallback, sunoCallbackReceivedAt: FieldValue.serverTimestamp() } : {})
     });
@@ -237,10 +303,11 @@ export async function processReadyAudio(limit = 3) {
 
   for (const doc of snap.docs) {
     const song = { id: doc.id, ...doc.data() };
+    const fullVersions = normalizeFullVersions(song);
 
-    if (!song.fullUrl) {
+    if (!fullVersions.length) {
       await moveStatus(doc.ref, "Error sin fullUrl", {
-        errorMsg: "fullUrl no disponible."
+        errorMsg: "fullUrl/fullUrls no disponible."
       });
       processed += 1;
       continue;
@@ -251,14 +318,25 @@ export async function processReadyAudio(limit = 3) {
     });
 
     try {
-      const clipUrl = await createWatermarkedClip({
-        musicId: doc.id,
-        fullUrl: song.fullUrl
-      });
+      const clipVersions = [];
+
+      for (const versionInfo of fullVersions) {
+        const clipUrl = await createWatermarkedClip({
+          musicId: doc.id,
+          fullUrl: versionInfo.fullUrl,
+          version: versionInfo.version
+        });
+        clipVersions.push({ version: versionInfo.version, clipUrl });
+      }
+
+      const clipUrls = clipVersions.map((item) => item.clipUrl);
 
       await moveStatus(doc.ref, "Enviar musica", {
-        clipUrl,
-        clipGeneratedAt: FieldValue.serverTimestamp()
+        clipUrl: clipUrls[0],
+        clipUrls,
+        clipVersions,
+        clipGeneratedAt: FieldValue.serverTimestamp(),
+        errorMsg: FieldValue.delete()
       });
     } catch (error) {
       await moveStatus(doc.ref, "Error clip", {
@@ -281,10 +359,11 @@ export async function sendReadySongs(limit = 3) {
 
   for (const doc of snap.docs) {
     const song = { id: doc.id, ...doc.data() };
+    const clipUrls = getClipUrls(song);
 
-    if (!song.leadPhone || !song.lyrics || !song.clipUrl) {
+    if (!song.leadPhone || !song.lyrics || !clipUrls.length) {
       await moveStatus(doc.ref, "Error envio", {
-        errorMsg: "Faltan leadPhone, lyrics o clipUrl."
+        errorMsg: "Faltan leadPhone, lyrics o clipUrl/clipUrls."
       });
       processed += 1;
       continue;
@@ -342,14 +421,7 @@ export async function resetStuckMusic(thresholdMinutes = 30) {
 
   for (const doc of snap.docs) {
     const data = doc.data();
-    const startedAt =
-      data.lyricsProcessingStartedAt?.toDate?.()?.getTime?.() ||
-      data.promptProcessingStartedAt?.toDate?.()?.getTime?.() ||
-      data.musicProcessingStartedAt?.toDate?.()?.getTime?.() ||
-      data.audioPersistStartedAt?.toDate?.()?.getTime?.() ||
-      data.clipProcessingStartedAt?.toDate?.()?.getTime?.() ||
-      data.sendingStartedAt?.toDate?.()?.getTime?.() ||
-      0;
+    const startedAt = getStartedAtForStatus(data);
 
     if (!startedAt || startedAt >= cutoff) continue;
 

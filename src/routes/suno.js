@@ -1,6 +1,6 @@
 import { Router } from "express";
 import { db, FieldValue } from "../firebase.js";
-import { extractAudioUrlFromCallback, extractTaskIdFromCallback } from "../services/sunoService.js";
+import { extractAudioUrlsFromCallback, extractTaskIdFromCallback } from "../services/sunoService.js";
 import { persistSunoAudioResult, processReadyAudio } from "../jobs/musicPipeline.js";
 
 export const sunoRouter = Router();
@@ -22,20 +22,26 @@ sunoRouter.post("/callback", async (req, res) => {
     }
 
     const doc = snap.docs[0];
-    const audioUrl = extractAudioUrlFromCallback(req.body);
+    const audioUrls = extractAudioUrlsFromCallback(req.body);
+    const callbackType = String(req.body?.data?.callbackType || "");
+    const normalizedCallbackType = callbackType.toUpperCase();
+    const isPartialCallback = normalizedCallbackType.includes("FIRST");
+    const isCompleteCallback =
+      (normalizedCallbackType.includes("COMPLETE") || normalizedCallbackType.includes("SUCCESS")) && !isPartialCallback;
 
-    if (!audioUrl) {
+    if (!audioUrls.length || (audioUrls.length < 2 && !isCompleteCallback)) {
       await doc.ref.update({
         sunoCallbackReceivedAt: FieldValue.serverTimestamp(),
-        sunoCallbackType: req.body?.data?.callbackType || null,
+        sunoCallbackType: callbackType || null,
+        sunoCallbackAudioCount: audioUrls.length,
         updatedAt: FieldValue.serverTimestamp()
       });
-      return res.json({ ok: true, message: "Callback recibido sin audio final." });
+      return res.json({ ok: true, message: "Callback recibido sin todas las versiones finales." });
     }
 
     const persisted = await persistSunoAudioResult(doc, {
       taskId,
-      audioUrl,
+      audioUrls,
       source: "callback",
       rawCallback: req.body
     });

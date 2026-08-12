@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import { mkdtemp } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
@@ -48,19 +49,44 @@ function runFfmpeg(command) {
   });
 }
 
-export async function createWatermarkedClip({ musicId, fullUrl }) {
+async function createJobTmpDir(prefix) {
+  const baseTmpDir = config.tmpDir || os.tmpdir();
+  fs.mkdirSync(baseTmpDir, { recursive: true });
+  return mkdtemp(path.join(baseTmpDir, `${prefix}-`));
+}
+
+function cleanupFiles(filePaths) {
+  filePaths.forEach((filePath) => {
+    try {
+      if (fs.existsSync(filePath)) fs.unlinkSync(filePath);
+    } catch {
+      // ignore cleanup errors
+    }
+  });
+}
+
+function logAudioUrlContext(label, audioUrl) {
+  try {
+    const parsed = new URL(audioUrl);
+    console.log(label, { host: parsed.host, pathname: parsed.pathname });
+  } catch {
+    console.log(label, { host: null, pathname: null });
+  }
+}
+
+export async function createWatermarkedClip({ musicId, fullUrl, version = 1 }) {
   configureFfmpeg();
 
-  const tmpDir = config.tmpDir || os.tmpdir();
-  fs.mkdirSync(tmpDir, { recursive: true });
+  const tmpDir = await createJobTmpDir(`clip-${musicId}-v${version}`);
 
-  const tmpFull = path.join(tmpDir, `${musicId}-full.mp3`);
-  const tmpClip = path.join(tmpDir, `${musicId}-clip.m4a`);
-  const tmpWatermark = path.join(tmpDir, `${musicId}-watermark.mp3`);
-  const tmpFinal = path.join(tmpDir, `${musicId}-watermarked.m4a`);
+  const tmpFull = path.join(tmpDir, `${musicId}-v${version}-full.mp3`);
+  const tmpClip = path.join(tmpDir, `${musicId}-v${version}-clip.m4a`);
+  const tmpWatermark = path.join(tmpDir, `${musicId}-v${version}-watermark.mp3`);
+  const tmpFinal = path.join(tmpDir, `${musicId}-v${version}-watermarked.m4a`);
 
   try {
-    console.log("[audio] creating clip", { musicId, tmpDir });
+    console.log("[audio] creating clip", { musicId, version, tmpDir });
+    logAudioUrlContext("[audio] full url for clip", fullUrl);
     await downloadToFile(fullUrl, tmpFull);
     await runFfmpeg(
       ffmpeg(tmpFull)
@@ -82,33 +108,33 @@ export async function createWatermarkedClip({ musicId, fullUrl }) {
         .output(tmpFinal)
     );
 
-    return uploadAudioAndGetUrl(tmpFinal, `musica/clip/${musicId}-clip.m4a`, "audio/mp4");
+    return uploadAudioAndGetUrl(tmpFinal, `musica/clip/${musicId}-v${version}-clip.m4a`, "audio/mp4");
   } finally {
-    [tmpFull, tmpClip, tmpWatermark, tmpFinal].forEach((filePath) => {
-      try {
-        if (fs.existsSync(filePath)) fs.unlinkSync(filePath);
-      } catch {
-        // ignore cleanup errors
-      }
-    });
+    cleanupFiles([tmpFull, tmpClip, tmpWatermark, tmpFinal]);
+    try {
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    } catch {
+      // ignore cleanup errors
+    }
   }
 }
 
-export async function persistFullAudio({ musicId, taskId, audioUrl }) {
-  const tmpDir = config.tmpDir || os.tmpdir();
-  fs.mkdirSync(tmpDir, { recursive: true });
+export async function persistFullAudio({ musicId, taskId, audioUrl, version = 1 }) {
+  const tmpDir = await createJobTmpDir(`full-${musicId}-v${version}`);
 
-  const tmpFull = path.join(tmpDir, `${taskId}-${randomUUID()}-full.mp3`);
+  const tmpFull = path.join(tmpDir, `${taskId}-v${version}-${randomUUID()}-full.mp3`);
 
   try {
-    console.log("[audio] persisting full audio", { musicId, taskId, tmpFull });
+    console.log("[audio] persisting full audio", { musicId, taskId, version, tmpFull });
+    logAudioUrlContext("[audio] source full audio", audioUrl);
     await downloadToFile(audioUrl, tmpFull);
     const stats = fs.statSync(tmpFull);
     console.log("[audio] full audio downloaded", { musicId, taskId, bytes: stats.size });
-    return uploadAudioAndGetUrl(tmpFull, `musica/full/${musicId}-${taskId}.mp3`, "audio/mpeg");
+    return uploadAudioAndGetUrl(tmpFull, `musica/full/${musicId}-${taskId}-v${version}.mp3`, "audio/mpeg");
   } finally {
+    cleanupFiles([tmpFull, `${tmpFull}.part`]);
     try {
-      if (fs.existsSync(tmpFull)) fs.unlinkSync(tmpFull);
+      fs.rmSync(tmpDir, { recursive: true, force: true });
     } catch {
       // ignore cleanup errors
     }

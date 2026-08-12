@@ -62,6 +62,7 @@ export async function sendSongWithKanwap(song) {
   await verifyKanwapSession();
 
   const greetingName = song.customerName?.split(" ")[0] || song.recipientName || "";
+  const clipUrls = getClipUrls(song);
   const lyricsMessage = [
     greetingName ? `Hola ${greetingName}.` : "Hola.",
     `Ya tenemos lista la cancion "${song.title}".`,
@@ -71,7 +72,10 @@ export async function sendSongWithKanwap(song) {
     song.lyrics
   ].join("\n");
 
-  const intro = "Ahora escucha el clip con marca de agua.";
+  const intro =
+    clipUrls.length > 1
+      ? `Ahora escucha las ${clipUrls.length} versiones con marca de agua.`
+      : "Ahora escucha el clip con marca de agua.";
 
   const textResult = await sendKanwapText({
     phone: song.leadPhone,
@@ -83,13 +87,39 @@ export async function sendSongWithKanwap(song) {
     message: intro
   });
 
-  const audioResult = await sendKanwapAudio({
-    phone: song.leadPhone,
-    audioUrl: song.clipUrl
-  });
+  const audioResults = [];
+
+  for (const [index, clipUrl] of clipUrls.entries()) {
+    if (clipUrls.length > 1) {
+      await sendKanwapText({
+        phone: song.leadPhone,
+        message: `Version ${index + 1}:`
+      });
+    }
+
+    const audioResult = await sendKanwapAudio({
+      phone: song.leadPhone,
+      audioUrl: clipUrl
+    });
+
+    audioResults.push(audioResult);
+  }
 
   return {
     textMessageId: textResult.datos?.mensajeId || null,
-    audioMessageId: audioResult.datos?.mensajeId || null
+    audioMessageId: audioResults[0]?.datos?.mensajeId || null,
+    audioMessageIds: audioResults.map((result) => result.datos?.mensajeId || null)
   };
+}
+
+function getClipUrls(song) {
+  if (Array.isArray(song.clipVersions) && song.clipVersions.length) {
+    return song.clipVersions.map((item) => item?.clipUrl).filter(Boolean).slice(0, 2);
+  }
+
+  if (Array.isArray(song.clipUrls) && song.clipUrls.length) {
+    return song.clipUrls.filter(Boolean).slice(0, 2);
+  }
+
+  return song.clipUrl ? [song.clipUrl] : [];
 }
