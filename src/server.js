@@ -4,7 +4,7 @@ import { config } from "./config.js";
 import { musicRouter } from "./routes/music.js";
 import { sunoRouter } from "./routes/suno.js";
 import { jobsRouter } from "./routes/jobs.js";
-import { whatsappRouter } from "./routes/whatsapp.js";
+import { bootstrapWhatsappProvider, whatsappRouter } from "./routes/whatsapp.js";
 import { adminRouter } from "./routes/admin.js";
 import { startCron } from "./jobs/cron.js";
 
@@ -51,4 +51,7 @@ app.listen(config.port, () => {
     hasKanwapSession: Boolean(config.kanwapSessionId)
   });
   if (config.enableCron) startCron();
+  bootstrapWhatsappProvider().catch((error) => {
+    console.error("[whatsapp/bootstrap] failed:", error);
+  });
 });
