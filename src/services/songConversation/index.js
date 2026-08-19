@@ -835,3 +835,84 @@ function safeDocumentId(value) {
   if (normalized) return normalized;
   return crypto.randomUUID();
 }
+
+/**
+ * Borra un lead y todo lo que colgaba de el, para poder repetir el flujo de
+ * prueba con el mismo numero. Incluye los pedidos de `musica`: si quedaran
+ * huerfanos, el pipeline seguiria mandando audios a un lead ya borrado.
+ */
+export async function deleteLeadAndData(leadId, { force = false } = {}) {
+  const leadRef = db.collection(COLLECTIONS.leads).doc(leadId);
+  const leadSnap = await leadRef.get();
+  if (!leadSnap.exists) throw new Error("Lead no encontrado.");
+
+  const lead = leadSnap.data();
+  const conversationSnap = await db.collection(COLLECTIONS.conversations).where("leadId", "==", leadId).get();
+  const createdByBot = Boolean(lead.waJid || lead.mode || conversationSnap.size);
+
+  // Los leads del CRM anterior viven en la misma coleccion y no se tocan sin querer.
+  if (!createdByBot && !force) {
+    throw new Error("Este lead no lo creo el bot. Repite con force=true si de verdad quieres borrarlo.");
+  }
+
+  const deleted = { conversations: 0, messages: 0, songOrders: 0, music: 0, processedMessages: 0 };
+  const songOrderIds = new Set();
+
+  for (const conversationDoc of conversationSnap.docs) {
+    const songOrderId = conversationDoc.data().songOrderId;
+    if (songOrderId) songOrderIds.add(songOrderId);
+
+    deleted.messages += await deleteCollection(conversationDoc.ref.collection("messages"));
+    await conversationDoc.ref.delete();
+    deleted.conversations += 1;
+  }
+
+  const orderSnap = await db.collection(COLLECTIONS.songOrders).where("leadId", "==", leadId).get();
+  orderSnap.docs.forEach((doc) => songOrderIds.add(doc.id));
+
+  for (const songOrderId of songOrderIds) {
+    await db.collection(COLLECTIONS.songOrders).doc(songOrderId).delete();
+    deleted.songOrders += 1;
+  }
+
+  deleted.music = await deleteQuery(db.collection("musica").where("leadId", "==", leadId));
+
+  if (lead.phone) {
+    deleted.processedMessages = await deleteQuery(
+      db.collection(COLLECTIONS.processedMessages).where("phone", "==", lead.phone)
+    );
+  }
+
+  await leadRef.delete();
+
+  console.log("[admin] lead borrado", { leadId, phone: lead.phone, ...deleted });
+  return deleted;
+}
+
+async function deleteCollection(collectionRef) {
+  let total = 0;
+
+  while (true) {
+    const snap = await collectionRef.limit(300).get();
+    if (snap.empty) return total;
+
+    const batch = db.batch();
+    snap.docs.forEach((doc) => batch.delete(doc.ref));
+    await batch.commit();
+    total += snap.size;
+  }
+}
+
+async function deleteQuery(query) {
+  let total = 0;
+
+  while (true) {
+    const snap = await query.limit(300).get();
+    if (snap.empty) return total;
+
+    const batch = db.batch();
+    snap.docs.forEach((doc) => batch.delete(doc.ref));
+    await batch.commit();
+    total += snap.size;
+  }
+}

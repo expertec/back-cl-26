@@ -1,6 +1,6 @@
 import { Router } from "express";
 import { z } from "zod";
-import { listKanbanLeads, updateLeadKanbanStage } from "../services/songConversation/index.js";
+import { deleteLeadAndData, listKanbanLeads, updateLeadKanbanStage } from "../services/songConversation/index.js";
 
 export const adminRouter = Router();
 
@@ -47,6 +47,24 @@ adminRouter.patch("/leads/:leadId", async (req, res) => {
     return res.status(500).json({
       ok: false,
       error: error.message || "No se pudo actualizar el lead."
+    });
+  }
+});
+
+adminRouter.delete("/leads/:leadId", async (req, res) => {
+  const force = req.query.force === "true";
+
+  try {
+    const deleted = await deleteLeadAndData(req.params.leadId, { force });
+    return res.json({ ok: true, deleted });
+  } catch (error) {
+    const notFound = /no encontrado/i.test(error.message);
+    const blocked = /no lo creo el bot/i.test(error.message);
+
+    return res.status(notFound ? 404 : blocked ? 409 : 500).json({
+      ok: false,
+      error: error.message || "No se pudo borrar el lead.",
+      ...(blocked ? { needsForce: true } : {})
     });
   }
 });
