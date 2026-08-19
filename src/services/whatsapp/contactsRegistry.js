@@ -1,7 +1,9 @@
 import { db, FieldValue } from "../../firebase.js";
 import { normalizePhone } from "../../schemas.js";
 
-const SESSIONS_COLLECTION = "whatsappSessions";
+// Coleccion aparte a proposito: si compartiera documento con las credenciales,
+// un array de contactos grande podria hacer fallar el guardado de la sesion.
+const CONTACTS_COLLECTION = "whatsappContacts";
 const PERSIST_DEBOUNCE_MS = 15000;
 
 const registries = new Map();
@@ -46,7 +48,7 @@ export async function loadContacts(sessionId) {
   const registry = getRegistry(sessionId);
 
   try {
-    const snap = await db.collection(SESSIONS_COLLECTION).doc(sessionId).get();
+    const snap = await db.collection(CONTACTS_COLLECTION).doc(sessionId).get();
     const stored = snap.exists ? snap.data()?.contactPhones : null;
     if (Array.isArray(stored)) stored.forEach((phone) => registry.phones.add(phone));
 
@@ -79,7 +81,7 @@ function schedulePersist(sessionId, registry) {
 
     try {
       await db
-        .collection(SESSIONS_COLLECTION)
+        .collection(CONTACTS_COLLECTION)
         .doc(sessionId)
         .set(
           {

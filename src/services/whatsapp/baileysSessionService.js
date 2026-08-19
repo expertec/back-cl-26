@@ -99,7 +99,10 @@ export async function connectBaileysSession(sessionId = config.baileysSessionId)
 
       if (connection === "close") {
         const reason = lastDisconnect?.error?.output?.statusCode;
-        const loggedOut = reason === DisconnectReason.loggedOut || reason === 405;
+        // Solo un cierre de sesion real justifica borrar las credenciales. El 405
+        // suele ser un rechazo temporal de WhatsApp y borrarlas obligaba a
+        // reescanear el QR por algo que se resuelve reintentando.
+        const loggedOut = reason === DisconnectReason.loggedOut;
 
         session.sock = null;
 
