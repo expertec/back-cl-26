@@ -358,6 +358,22 @@ export async function persistSunoAudioResult(doc, { taskId, audioUrl, audioUrls,
   }
 }
 
+/**
+ * Los pedidos listos van primero y en su propia consulta: antes compartian una
+ * sola ventana con los "Error envio" y bastaban tres fallos viejos con los
+ * reintentos agotados para que una cancion recien terminada no se enviara nunca.
+ */
+async function getSendableDocs(limit) {
+  const readySnap = await getFirstByStatus("Enviar musica", limit);
+  const docs = [...readySnap.docs];
+  if (docs.length >= limit) return docs;
+
+  const retrySnap = await getFirstByStatus("Error envio", limit * 5);
+  const retryable = retrySnap.docs.filter((doc) => Number(doc.data().sendAttemptCount || 0) < 3);
+
+  return docs.concat(retryable.slice(0, limit - docs.length));
+}
+
 export async function processReadyAudio(limit = 3) {
   const snap = await getFirstByStatus("Audio listo", limit);
   if (snap.empty) return 0;
@@ -415,19 +431,14 @@ export async function processReadyAudio(limit = 3) {
 }
 
 export async function sendReadySongs(limit = 3) {
-  const snap = await getFirstByStatuses(["Enviar musica", "Error envio"], limit);
-  if (snap.empty) return 0;
+  const docs = await getSendableDocs(limit);
+  if (!docs.length) return 0;
 
   let processed = 0;
 
-  for (const doc of snap.docs) {
+  for (const doc of docs) {
     const song = { id: doc.id, ...doc.data() };
     const clipUrls = getClipUrls(song);
-    const sendAttemptCount = Number(song.sendAttemptCount || 0);
-
-    if (song.status === "Error envio" && sendAttemptCount >= 3) {
-      continue;
-    }
 
     if (!song.leadPhone || !song.lyrics || !clipUrls.length) {
       await moveStatus(doc.ref, "Error envio", {
