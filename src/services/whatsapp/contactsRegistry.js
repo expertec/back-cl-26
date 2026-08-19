@@ -40,6 +40,24 @@ export function isSavedContact(sessionId, phone) {
   return registry.phones.has(normalizePhone(phone));
 }
 
+/**
+ * Al cerrar sesion hay que soltar la libreta: si se conecta otra cuenta, esos
+ * telefonos ya no son sus contactos y el bot dejaria de atender a leads reales
+ * por parecerse a los contactos del numero anterior.
+ */
+export async function clearContacts(sessionId) {
+  const registry = registries.get(sessionId);
+  if (registry?.timer) clearTimeout(registry.timer);
+  registries.delete(sessionId);
+
+  try {
+    await db.collection(CONTACTS_COLLECTION).doc(sessionId).delete();
+    console.log("[contactos] registro borrado", { sessionId });
+  } catch (error) {
+    console.error("[contactos] no se pudo borrar el registro", { sessionId, error: error.message });
+  }
+}
+
 export function getContactsCount(sessionId) {
   return registries.get(sessionId)?.phones.size || 0;
 }

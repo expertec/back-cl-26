@@ -9,7 +9,7 @@ import QRCode from "qrcode";
 import { config } from "../../config.js";
 import { transcribeAudio } from "../openaiService.js";
 import { getWhatsAppWebVersion } from "./baileysVersion.js";
-import { loadContacts, registerContacts } from "./contactsRegistry.js";
+import { clearContacts, loadContacts, registerContacts } from "./contactsRegistry.js";
 import { clearFirestoreAuthState, listFirestoreSessionIds, useFirestoreAuthState } from "./firestoreAuthState.js";
 
 const APPEND_MAX_AGE_MS = 5 * 60 * 1000;
@@ -107,7 +107,7 @@ export async function connectBaileysSession(sessionId = config.baileysSessionId)
         session.sock = null;
 
         if (loggedOut) {
-          clearFirestoreAuthState(id).catch((clearError) => {
+          Promise.all([clearFirestoreAuthState(id), clearContacts(id)]).catch((clearError) => {
             console.error("[baileys] no se pudo borrar la sesion", { sessionId: id, error: clearError.message });
           });
           patchSession(session, {
@@ -254,6 +254,7 @@ export async function logoutBaileysSession(sessionId = config.baileysSessionId) 
   }
 
   await clearFirestoreAuthState(id);
+  await clearContacts(id);
   patchSession(session, {
     sock: null,
     qr: null,
