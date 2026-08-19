@@ -2,6 +2,7 @@ import { Router } from "express";
 import { config } from "../config.js";
 import { normalizeIncomingMessage } from "../services/whatsapp/index.js";
 import { bufferIncomingMessage } from "../services/whatsapp/inboundBuffer.js";
+import { shouldEngage } from "../services/whatsapp/botPolicy.js";
 import { processIncomingWhatsappMessage } from "../services/songConversation/index.js";
 import {
   connectBaileysSession,
@@ -33,8 +34,15 @@ export async function bootstrapWhatsappProvider() {
       phone: incoming.phone,
       messageId: incoming.messageId,
       chars: incoming.text.length,
-      ...(payload.transcribed ? { transcrito: true } : {})
+      ...(payload.transcribed ? { transcrito: true } : {}),
+      ...(payload.ad ? { campaña: payload.ad.sourceId || payload.ad.ctwaClid || "si" } : {})
     });
+
+    const policy = await shouldEngage(incoming);
+    if (!policy.engage) {
+      console.log("[whatsapp/inbound] ignorado", { phone: incoming.phone, motivo: policy.reason });
+      return;
+    }
 
     await bufferIncomingMessage(incoming, async (merged) => {
       const result = await processIncomingWhatsappMessage(merged);

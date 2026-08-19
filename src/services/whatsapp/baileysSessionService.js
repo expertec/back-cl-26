@@ -9,6 +9,7 @@ import QRCode from "qrcode";
 import { config } from "../../config.js";
 import { transcribeAudio } from "../openaiService.js";
 import { getWhatsAppWebVersion } from "./baileysVersion.js";
+import { loadContacts, registerContacts } from "./contactsRegistry.js";
 import { clearFirestoreAuthState, listFirestoreSessionIds, useFirestoreAuthState } from "./firestoreAuthState.js";
 
 const APPEND_MAX_AGE_MS = 5 * 60 * 1000;
@@ -47,6 +48,7 @@ export async function connectBaileysSession(sessionId = config.baileysSessionId)
 
   try {
     const { state, saveCreds } = await useFirestoreAuthState(id);
+    await loadContacts(id);
     if (state.creds?.me?.id) {
       patchSession(session, { phone: state.creds.me.id.split("@")[0] });
     }
@@ -126,6 +128,10 @@ export async function connectBaileysSession(sessionId = config.baileysSessionId)
     });
 
     sock.ev.on("creds.update", saveCreds);
+
+    sock.ev.on("contacts.upsert", (contacts) => registerContacts(id, contacts));
+    sock.ev.on("contacts.update", (contacts) => registerContacts(id, contacts));
+    sock.ev.on("messaging-history.set", ({ contacts }) => registerContacts(id, contacts || []));
     sock.ev.on("messages.upsert", (payload) => {
       handleMessagesUpsert(id, payload).catch((error) => {
         console.error("[baileys] messages.upsert failed", { sessionId: id, error: error.message });
@@ -387,6 +393,7 @@ async function normalizeBaileysMessage(message, sessionId) {
     contactName: message.pushName || "",
     timestamp: timestampMs,
     transcribed,
+    ad: extractAdReferral(message.message),
     jid,
     lid,
     raw: {
@@ -426,6 +433,30 @@ async function transcribeVoiceNote(message, sessionId) {
     });
     return "";
   }
+}
+
+/**
+ * Los mensajes que nacen de un anuncio click-to-WhatsApp traen el bloque
+ * externalAdReply, con el ctwaClid que Meta usa para atribuir el clic. Es la
+ * unica señal fiable para distinguir a alguien que llego por campaña.
+ */
+function extractAdReferral(message = {}) {
+  const content = unwrapEphemeral(message);
+  const contextInfo = Object.values(content || {}).find(
+    (value) => value && typeof value === "object" && value.contextInfo?.externalAdReply
+  )?.contextInfo;
+
+  const ad = contextInfo?.externalAdReply;
+  if (!ad) return null;
+
+  return {
+    ctwaClid: ad.ctwaClid || "",
+    sourceId: ad.sourceId || "",
+    sourceUrl: ad.sourceUrl || "",
+    sourceType: ad.sourceType || "",
+    title: ad.title || "",
+    body: ad.body || ""
+  };
 }
 
 function extractMessageText(message = {}) {

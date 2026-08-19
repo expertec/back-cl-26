@@ -86,6 +86,7 @@ export function normalizeIncomingMessage(payload = {}) {
       timestamp: payload.timestamp || Date.now(),
       sessionId: payload.sessionId || "",
       transcribed: Boolean(payload.transcribed),
+      ad: payload.ad || null,
       jid: payload.jid || "",
       lid: payload.lid || "",
       raw: payload.raw || payload

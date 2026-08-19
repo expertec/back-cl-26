@@ -481,7 +481,16 @@ async function getOrCreateConversationContext(incoming) {
       phone,
       waJid: incoming.jid || "",
       name: incoming.contactName || "",
-      source: "meta_ads",
+      source: incoming.ad ? "meta_ads" : "whatsapp_directo",
+      // Atribucion de campaña: que anuncio trajo a este lead.
+      ...(incoming.ad
+        ? {
+            adCtwaClid: incoming.ad.ctwaClid || "",
+            adSourceId: incoming.ad.sourceId || "",
+            adSourceUrl: incoming.ad.sourceUrl || "",
+            adTitle: incoming.ad.title || ""
+          }
+        : {}),
       status: CONVERSATION_STAGES.NEW_LEAD,
       kanbanStage: "new",
       score: 0,
