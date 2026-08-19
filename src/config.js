@@ -8,7 +8,17 @@ const whatsappProvider = (process.env.WHATSAPP_PROVIDER || "baileys").toLowerCas
 
 export const config = {
   port: Number(process.env.PORT || 3001),
-  frontendOrigin: process.env.FRONTEND_ORIGIN || "http://localhost:3000",
+  // Acepta lista separada por comas. Los origenes propios van por defecto para
+  // que el panel no dependa de recordar esta variable en cada despliegue.
+  frontendOrigins: String(process.env.FRONTEND_ORIGIN || "")
+    .split(",")
+    .map((value) => value.trim().replace(/\/$/, ""))
+    .filter(Boolean)
+    .concat([
+      "http://localhost:3000",
+      "http://localhost:3001",
+      "https://cantalab2026.vercel.app"
+    ]),
   openaiApiKey: process.env.OPENAI_API_KEY || "",
   openaiModel: process.env.OPENAI_MODEL || "gpt-4o-mini",
   openaiTranscribeModel: process.env.OPENAI_TRANSCRIBE_MODEL || "whisper-1",

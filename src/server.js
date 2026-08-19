@@ -10,9 +10,21 @@ import { startCron } from "./jobs/cron.js";
 
 const app = express();
 
+// Los previews de Vercel cambian de subdominio en cada despliegue, asi que se
+// reconocen por patron en vez de tener que listarlos uno por uno.
+const VERCEL_PREVIEW = /^https:\/\/cantalab2026(-[a-z0-9-]+)?\.vercel\.app$/;
+
+function isAllowedOrigin(origin) {
+  // Sin origen son llamadas server a server (Suno, curl, crons): no son CORS.
+  if (!origin) return true;
+  if (config.frontendOrigins.includes("*")) return true;
+  if (config.frontendOrigins.includes(origin.replace(/\/$/, ""))) return true;
+  return VERCEL_PREVIEW.test(origin);
+}
+
 app.use(
   cors({
-    origin: config.frontendOrigin === "*" ? true : config.frontendOrigin,
+    origin: (origin, callback) => callback(null, isAllowedOrigin(origin)),
     credentials: false
   })
 );
@@ -44,7 +56,7 @@ app.listen(config.port, () => {
   console.log(`Cantalab backend listening on ${config.port}`);
   console.log("[config]", {
     publicBackendUrl: config.publicBackendUrl,
-    frontendOrigin: config.frontendOrigin,
+    frontendOrigins: config.frontendOrigins,
     tmpDir: config.tmpDir,
     sunoBaseUrl: config.sunoBaseUrl,
     hasFirebaseBucket: Boolean(config.firebaseStorageBucket),
