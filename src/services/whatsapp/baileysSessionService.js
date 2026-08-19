@@ -363,7 +363,7 @@ function shouldProcessMessage(message, type, now) {
 }
 
 async function normalizeBaileysMessage(message, sessionId) {
-  const jid = message.key.remoteJid || "";
+  const { jid, phoneJid, lid } = resolveAddressing(message.key);
   const text = extractMessageText(message.message);
   const messageId = message.key.id;
   const timestampMs = getMessageTimestampMs(message);
@@ -372,11 +372,12 @@ async function normalizeBaileysMessage(message, sessionId) {
     provider: "baileys",
     sessionId,
     messageId,
-    phone: jidToPhone(jid),
+    phone: jidToPhone(phoneJid || jid),
     text,
     contactName: message.pushName || "",
     timestamp: timestampMs,
     jid,
+    lid,
     raw: {
       key: message.key,
       messageTimestamp: message.messageTimestamp,
@@ -469,11 +470,33 @@ function sanitizeSessionId(sessionId) {
   return id;
 }
 
-function toJid(phone) {
-  const raw = String(phone || "").trim();
-  if (raw.includes("@")) return raw;
-  const digits = raw.replace(/\D/g, "");
-  return `${digits}@s.whatsapp.net`;
+function toJid(phoneOrJid) {
+  const value = String(phoneOrJid || "");
+  if (value.includes("@")) return value;
+  return `${value.replace(/\D/g, "")}@s.whatsapp.net`;
+}
+
+/**
+ * WhatsApp esta migrando a LIDs: remoteJid llega como "1234567@lid", que no es
+ * un telefono. El numero real viene en remoteJidAlt. Sin esto el lead se
+ * guardaba con un identificador anonimo y la respuesta no llegaba a nadie.
+ */
+function resolveAddressing(key = {}) {
+  const remoteJid = key.remoteJid || "";
+  const alt = key.remoteJidAlt || "";
+  const isLid = remoteJid.endsWith("@lid");
+  const phoneJid = isLid ? (alt.endsWith("@s.whatsapp.net") ? alt : "") : remoteJid;
+
+  if (isLid && !phoneJid) {
+    console.warn("[baileys] mensaje con LID sin numero asociado; se respondera al LID", { remoteJid });
+  }
+
+  return {
+    // Para responder preferimos el JID con telefono; si no hay, el LID sirve.
+    jid: phoneJid || remoteJid,
+    phoneJid,
+    lid: isLid ? remoteJid : ""
+  };
 }
 
 function jidToPhone(jid) {

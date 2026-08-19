@@ -29,6 +29,10 @@ if (!admin.apps.length) {
 }
 
 export const db = admin.firestore();
+
+// Los payloads de Baileys traen campos undefined (key.remoteJidUsername y demas)
+// que Firestore rechaza y tumbaban el guardado del mensaje entrante.
+db.settings({ ignoreUndefinedProperties: true });
 export const bucket = admin.storage().bucket();
 export const FieldValue = admin.firestore.FieldValue;
 export { admin };

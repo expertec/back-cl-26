@@ -85,6 +85,7 @@ export function normalizeIncomingMessage(payload = {}) {
       contactName: payload.contactName || "",
       timestamp: payload.timestamp || Date.now(),
       jid: payload.jid || "",
+      lid: payload.lid || "",
       raw: payload.raw || payload
     };
   }

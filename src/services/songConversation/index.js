@@ -383,6 +383,7 @@ async function getOrCreateConversationContext(incoming) {
     leadRef = db.collection(COLLECTIONS.leads).doc();
     lead = {
       phone,
+      waJid: incoming.jid || "",
       name: incoming.contactName || "",
       source: "meta_ads",
       status: CONVERSATION_STAGES.NEW_LEAD,
@@ -511,7 +512,9 @@ async function touchInboundContext(context, incoming) {
   await Promise.all([
     context.leadRef.update({
       ...updates,
-      ...(incoming.contactName && !context.lead.name ? { name: incoming.contactName } : {})
+      ...(incoming.contactName && !context.lead.name ? { name: incoming.contactName } : {}),
+      // El JID es la direccion real de respuesta; con LIDs el telefono no basta.
+      ...(incoming.jid && incoming.jid !== context.lead.waJid ? { waJid: incoming.jid } : {})
     }),
     context.conversationRef.update(updates)
   ]);
@@ -552,7 +555,7 @@ async function sendAndSaveReply({ context, incoming, reply, suffix }) {
   if (!reply) return null;
 
   const delivery = await sendText({
-    phone: context.lead.phone,
+    phone: context.lead.waJid || context.lead.phone,
     message: reply,
     idempotencyKey: `${context.conversationRef.id}-${incoming.messageId}-${suffix}`
   });
@@ -678,6 +681,7 @@ function extractProviderMessageId(delivery) {
 function materializeLead(lead) {
   return {
     ...lead,
+    waJid: lead.waJid || "",
     phone: normalizePhone(lead.phone)
   };
 }
