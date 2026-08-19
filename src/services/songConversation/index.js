@@ -1,4 +1,5 @@
 import crypto from "node:crypto";
+import { config } from "../../config.js";
 import { db, FieldValue } from "../../firebase.js";
 import { normalizePhone } from "../../schemas.js";
 import { createLyrics, reviseLyrics } from "../openaiService.js";
@@ -341,11 +342,54 @@ async function handleLyricsApprovalIntent({ context, incoming, extraction }) {
   // segundo ajuste, pedido con otras palabras, cayera en la respuesta generica
   // y no cambiara nada: parecia que solo se podia corregir una vez.
   if (isActionableFeedback(incoming.text)) {
+    if (getRevisionsUsed(context.order) >= config.maxLyricsRevisions) {
+      return handleRevisionLimitReached({ context, incoming });
+    }
     return reviseLyricsFromConversation({ context, incoming, extraction });
   }
 
   const reply = "¿La letra te gusta asi o quieres que cambie alguna parte?";
   await sendAndSaveReply({ context, incoming, reply, suffix: "lyrics-followup" });
+  return buildResult(context, reply, CONVERSATION_STAGES.WAITING_LYRICS_APPROVAL);
+}
+
+function getRevisionsUsed(order = {}) {
+  if (typeof order.lyricsRevisionCount === "number") return order.lyricsRevisionCount;
+  // Pedidos anteriores al contador: la version 1 es la letra inicial.
+  return Math.max(0, Number(order.lyricsVersion || 1) - 1);
+}
+
+/**
+ * Agotadas las correcciones por chat no dejamos al cliente en un bucle: primero
+ * se le ofrece aprobar, y si insiste pasa a un asesor y el bot deja de contestar.
+ */
+async function handleRevisionLimitReached({ context, incoming }) {
+  if (context.order.revisionLimitNotifiedAt) {
+    await context.leadRef.update({ mode: "human", updatedAt: FieldValue.serverTimestamp() });
+    await context.conversationRef.update({ mode: "human", updatedAt: FieldValue.serverTimestamp() });
+    await setConversationStage({
+      conversationRef: context.conversationRef,
+      leadRef: context.leadRef,
+      stage: CONVERSATION_STAGES.HUMAN_TAKEOVER
+    });
+
+    const reply = "Voy a pasarte con alguien del equipo para afinar la letra contigo.";
+    await sendAndSaveReply({ context, incoming, reply, suffix: "revision-limit-human" });
+    return buildResult(context, reply, CONVERSATION_STAGES.HUMAN_TAKEOVER);
+  }
+
+  await context.orderRef.update({
+    revisionLimitNotifiedAt: FieldValue.serverTimestamp(),
+    updatedAt: FieldValue.serverTimestamp()
+  });
+  context.order = { ...context.order, revisionLimitNotifiedAt: true };
+
+  const reply = [
+    "Ya hice el ajuste que tenemos disponible por aqui.",
+    "",
+    "¿La dejamos asi y produzco la musica, o prefieres que te contacte alguien del equipo?"
+  ].join("\n");
+  await sendAndSaveReply({ context, incoming, reply, suffix: "revision-limit" });
   return buildResult(context, reply, CONVERSATION_STAGES.WAITING_LYRICS_APPROVAL);
 }
 
@@ -399,6 +443,7 @@ async function reviseLyricsFromConversation({ context, incoming, extraction }) {
         source: "revision"
       }),
       lyricsRevisionLock: FieldValue.delete(),
+      lyricsRevisionCount: FieldValue.increment(1),
       musicStatus: "lyrics_ready",
       updatedAt: FieldValue.serverTimestamp()
     });

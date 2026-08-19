@@ -37,6 +37,8 @@ export const config = {
   kanwapApiUrl: (process.env.KANWAP_API_URL || "https://kanwap.udelonline.com").replace(/\/$/, ""),
   kanwapApiKey: process.env.KANWAP_API_KEY || "",
   kanwapSessionId: process.env.KANWAP_SESION_ID || "",
+  // Correcciones de letra permitidas por chat antes de pasar a un asesor.
+  maxLyricsRevisions: Number(process.env.MAX_LYRICS_REVISIONS || 1),
   // Cuanto se espera a que el contacto termine de escribir antes de responder.
   inboundDebounceMs: Number(process.env.INBOUND_DEBOUNCE_MS || 8000),
   inboundBufferMaxWaitMs: Number(process.env.INBOUND_BUFFER_MAX_WAIT_MS || 45000),
