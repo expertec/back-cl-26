@@ -12,6 +12,11 @@ import { generateNextQuestion, selectNextField } from "./generateNextQuestion.js
 import { getMissingFields } from "./getMissingFields.js";
 import { buildSongForLyrics } from "./songBrief.js";
 
+// Si el proceso muere entre tomar el lock y liberarlo (un deploy a media
+// llamada a OpenAI), el pedido quedaba bloqueado para siempre: el cliente pedia
+// otro cambio y el bot no respondia nada nunca mas.
+const LOCK_MAX_AGE_MS = 5 * 60 * 1000;
+
 const POST_APPROVAL_STAGES = new Set([
   CONVERSATION_STAGES.LYRICS_APPROVED,
   CONVERSATION_STAGES.PRODUCING_SONG,
@@ -236,7 +241,12 @@ async function completeBriefAndGenerateLyrics({ context, incoming }) {
 
   const lock = await lockOrderForLyrics(context.orderRef);
   if (!lock.locked) {
-    return buildResult(context, "", context.conversation.stage, { skipped: lock.reason });
+    const reply =
+      lock.reason === "lyrics-exist"
+        ? "Ya tienes la letra arriba. ¿La dejamos asi o quieres que cambie algo?"
+        : "Estoy escribiendo tu letra, dame un momento.";
+    await sendAndSaveReply({ context, incoming, reply, suffix: `lyrics-${lock.reason}` });
+    return buildResult(context, reply, context.conversation.stage, { skipped: lock.reason });
   }
 
   await setConversationStage({
@@ -315,7 +325,22 @@ async function handleLyricsApprovalIntent({ context, incoming, extraction }) {
     return buildResult(context, reply, CONVERSATION_STAGES.PRODUCING_SONG);
   }
 
-  if (extraction.intent === INTENTS.REQUEST_LYRICS_CHANGE) {
+  if (extraction.intent === INTENTS.BUYING_SIGNAL) {
+    await setConversationStage({
+      conversationRef: context.conversationRef,
+      leadRef: context.leadRef,
+      stage: CONVERSATION_STAGES.READY_FOR_SALES
+    });
+    const reply = "Te paso con el equipo para ayudarte con la version completa.";
+    await sendAndSaveReply({ context, incoming, reply, suffix: "sales-ready" });
+    return buildResult(context, reply, CONVERSATION_STAGES.READY_FOR_SALES);
+  }
+
+  // Con la letra en pantalla, casi todo lo que escribe el cliente es feedback
+  // sobre ella. Exigir un verbo concreto ("cambia", "ponle") hacia que el
+  // segundo ajuste, pedido con otras palabras, cayera en la respuesta generica
+  // y no cambiara nada: parecia que solo se podia corregir una vez.
+  if (isActionableFeedback(incoming.text)) {
     return reviseLyricsFromConversation({ context, incoming, extraction });
   }
 
@@ -324,11 +349,30 @@ async function handleLyricsApprovalIntent({ context, incoming, extraction }) {
   return buildResult(context, reply, CONVERSATION_STAGES.WAITING_LYRICS_APPROVAL);
 }
 
+const GREETING_ONLY = /^(hola|buenas|buenos dias|buenas tardes|buenas noches|hey|que tal|holi|ola)[\s!.,¡]*$/i;
+
+function isActionableFeedback(text = "") {
+  const raw = String(text).trim();
+  if (raw.length < 4) return false;
+
+  const normalized = raw
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .trim();
+
+  if (GREETING_ONLY.test(normalized)) return false;
+  if (/^[?¿\s]+$/.test(normalized)) return false;
+
+  return true;
+}
+
 async function reviseLyricsFromConversation({ context, incoming, extraction }) {
   const revisionInstruction = extraction.revisionInstruction || incoming.text;
   const lock = await lockOrderForRevision(context.orderRef);
   if (!lock.locked) {
-    return buildResult(context, "", context.conversation.stage, { skipped: lock.reason });
+    const reply = "Ya estoy ajustando la letra, dame un momento y te la mando.";
+    await sendAndSaveReply({ context, incoming, reply, suffix: "revision-en-curso" });
+    return buildResult(context, reply, context.conversation.stage, { skipped: lock.reason });
   }
 
   await setConversationStage({
@@ -621,7 +665,9 @@ async function lockOrderForLyrics(orderRef) {
     const snap = await transaction.get(orderRef);
     const data = snap.data();
     if (data.lyrics) return { locked: false, reason: "lyrics-exist" };
-    if (data.lyricsGenerationLock) return { locked: false, reason: "lyrics-locked" };
+    if (data.lyricsGenerationLock && !isLockExpired(data.lyricsGenerationStartedAt, orderRef.id, "lyrics")) {
+      return { locked: false, reason: "lyrics-locked" };
+    }
 
     transaction.update(orderRef, {
       lyricsGenerationLock: true,
@@ -638,7 +684,9 @@ async function lockOrderForRevision(orderRef) {
   return db.runTransaction(async (transaction) => {
     const snap = await transaction.get(orderRef);
     const data = snap.data();
-    if (data.lyricsRevisionLock) return { locked: false, reason: "revision-locked" };
+    if (data.lyricsRevisionLock && !isLockExpired(data.lyricsRevisionStartedAt, orderRef.id, "revision")) {
+      return { locked: false, reason: "revision-locked" };
+    }
 
     transaction.update(orderRef, {
       lyricsRevisionLock: true,
@@ -648,6 +696,21 @@ async function lockOrderForRevision(orderRef) {
 
     return { locked: true };
   });
+}
+
+function isLockExpired(startedAt, orderId, kind) {
+  const startedMs = startedAt?.toDate?.()?.getTime?.() || 0;
+  const expired = !startedMs || Date.now() - startedMs > LOCK_MAX_AGE_MS;
+
+  if (expired) {
+    console.warn("[conversation] lock vencido, se retoma el pedido", {
+      songOrderId: orderId,
+      lock: kind,
+      startedAt: startedMs ? new Date(startedMs).toISOString() : null
+    });
+  }
+
+  return expired;
 }
 
 async function triggerSongProduction(context) {
