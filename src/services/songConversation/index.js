@@ -282,7 +282,8 @@ async function completeBriefAndGenerateLyrics({ context, incoming }) {
       stage: CONVERSATION_STAGES.WAITING_LYRICS_APPROVAL
     });
 
-    const reply = buildLyricsApprovalMessage(lyrics);
+    const revisionsLeft = Math.max(0, config.maxLyricsRevisions - getRevisionsUsed(context.order));
+    const reply = buildLyricsApprovalMessage(lyrics, undefined, revisionsLeft);
     await sendAndSaveReply({ context, incoming, reply, suffix: `lyrics-v${version}` });
     return buildResult(context, reply, CONVERSATION_STAGES.WAITING_LYRICS_APPROVAL);
   } catch (error) {
@@ -454,7 +455,8 @@ async function reviseLyricsFromConversation({ context, incoming, extraction }) {
       stage: CONVERSATION_STAGES.WAITING_LYRICS_APPROVAL
     });
 
-    const reply = buildLyricsApprovalMessage(lyrics, "Listo, ajuste la letra:");
+    const revisionsLeft = Math.max(0, config.maxLyricsRevisions - (getRevisionsUsed(context.order) + 1));
+    const reply = buildLyricsApprovalMessage(lyrics, "Listo, ajuste la letra:", revisionsLeft);
     await sendAndSaveReply({ context, incoming, reply, suffix: `lyrics-revision-v${version}` });
     return buildResult(context, reply, CONVERSATION_STAGES.WAITING_LYRICS_APPROVAL);
   } catch (error) {
@@ -783,14 +785,25 @@ async function triggerSongProduction(context) {
   }
 }
 
-function buildLyricsApprovalMessage(lyrics, intro = "Ya tengo una primera letra:") {
-  return [
-    intro,
-    "",
-    lyrics,
-    "",
-    "¿Te gusta asi o quieres que cambie algo antes de producir la musica?"
-  ].join("\n");
+function buildLyricsApprovalMessage(lyrics, intro = "Ya tengo una primera letra:", revisionsLeft = 0) {
+  return [intro, "", lyrics, "", buildApprovalClosing(revisionsLeft)].join("\n");
+}
+
+// La regla se dice al entregar la letra, que es cuando el cliente decide si
+// gasta su ajuste o aprueba.
+function buildApprovalClosing(revisionsLeft) {
+  if (revisionsLeft <= 0) {
+    return "Esta es la version final de la muestra. ¿La apruebo y produzco la musica?";
+  }
+
+  if (revisionsLeft === 1) {
+    return [
+      "Para la muestra puedo hacerle un cambio.",
+      "¿La dejamos asi o prefieres usar ese cambio antes de producir la musica?"
+    ].join(" ");
+  }
+
+  return `Para la muestra puedo hacerle hasta ${revisionsLeft} cambios. ¿La dejamos asi o quieres ajustar algo?`;
 }
 
 function buildResult(context, reply, stage, extra = {}) {
