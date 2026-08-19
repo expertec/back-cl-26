@@ -78,7 +78,7 @@ function normalizeExtraction(result, messageText) {
 
   for (const field of VALID_ORDER_FIELDS) {
     const value = sourceFields[field];
-    if (typeof value === "string" && value.trim() && !isSchemaEcho(value)) {
+    if (typeof value === "string" && value.trim() && !isSchemaEcho(value) && !isGenericValue(field, value)) {
       extractedFields[field] = value.trim();
     }
   }
@@ -127,6 +127,40 @@ function findExtractedFields(result) {
   }
 
   return {};
+}
+
+/**
+ * "Hola, quiero que me hagan una cancion" hacia que el modelo extrajera
+ * purpose: "una cancion". Eso da por contestada la ocasion con un eco del
+ * pedido y el bot ya nunca la pregunta, que es justo el dato mas importante
+ * cuando el lead llega de una campana con mensaje predefinido.
+ */
+const GENERIC_VALUES = {
+  purpose: [
+    "cancion",
+    "una cancion",
+    "cancion personalizada",
+    "una cancion personalizada",
+    "hacer una cancion",
+    "quiero una cancion",
+    "musica",
+    "personalizada",
+    "regalo"
+  ],
+  recipient: ["destinatario", "alguien", "una persona", "mi"],
+  clientName: ["cliente", "yo", "usuario"],
+  story: ["historia", "una historia", "anecdota"],
+  genre: ["genero", "musica", "cualquier genero"]
+};
+
+function isGenericValue(field, value) {
+  const normalized = String(value)
+    .trim()
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "");
+
+  return (GENERIC_VALUES[field] || []).includes(normalized);
 }
 
 // Descarta respuestas donde el modelo repite el schema en vez de contestar.

@@ -26,8 +26,12 @@ export async function generateNextQuestion({ missingFields, order, conversation 
 
   try {
     const result = await createJsonChatCompletion({
-      system:
-        "Escribe una sola respuesta natural de WhatsApp para pedir el dato faltante. No suenes como formulario. No preguntes datos ya conocidos.",
+      system: [
+        "Escribe una sola respuesta natural de WhatsApp para pedir el dato faltante.",
+        "No suenes como formulario. No preguntes datos ya conocidos.",
+        'Devuelve JSON {"reply": "...", "field": "..."} donde field es exactamente nextMissingField.',
+        "La pregunta debe ser sobre ese campo y ningun otro."
+      ].join(" "),
       user: {
         nextMissingField: nextField,
         nextMissingFieldMeaning: getFieldLabel(nextField),
@@ -43,8 +47,15 @@ export async function generateNextQuestion({ missingFields, order, conversation 
       maxTokens: 120
     });
 
+    // Si el modelo pregunta por otro campo, el registro de lo ya preguntado se
+    // desincroniza y hay campos que nunca se llegan a pedir.
     if (typeof result?.reply === "string" && result.reply.trim()) {
-      return result.reply.trim();
+      if (!result.field || result.field === nextField) return result.reply.trim();
+
+      console.warn("[conversation] la pregunta no correspondia al campo pedido; usando la de respaldo", {
+        nextField,
+        modelField: result.field
+      });
     }
   } catch (error) {
     console.warn("[conversation] OpenAI question failed; using fallback", { message: error.message });
