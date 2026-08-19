@@ -1,18 +1,18 @@
-import fs from "node:fs";
-import path from "node:path";
 import {
   Browsers,
   DisconnectReason,
   downloadMediaMessage,
-  makeWASocket,
-  useMultiFileAuthState as baileysUseMultiFileAuthState
+  makeWASocket
 } from "baileys";
 import Pino from "pino";
 import QRCode from "qrcode";
 import { config } from "../../config.js";
 import { getWhatsAppWebVersion } from "./baileysVersion.js";
+import { clearFirestoreAuthState, listFirestoreSessionIds, useFirestoreAuthState } from "./firestoreAuthState.js";
 
 const APPEND_MAX_AGE_MS = 5 * 60 * 1000;
+const RECONNECT_BASE_MS = 5000;
+const RECONNECT_MAX_MS = 5 * 60 * 1000;
 const SEND_TIMEOUT_MS = 120000;
 
 export const BAILEYS_STATUS = Object.freeze({
@@ -28,6 +28,7 @@ const processedInMemory = new Map();
 const logger = Pino({ level: process.env.BAILEYS_LOG_LEVEL || process.env.WA_LOG_LEVEL || "warn" });
 let inboundHandler = null;
 let warnedMissingHandler = false;
+let watchdogTimer = null;
 
 export function setBaileysInboundHandler(handler) {
   inboundHandler = typeof handler === "function" ? handler : null;
@@ -44,11 +45,7 @@ export async function connectBaileysSession(sessionId = config.baileysSessionId)
   patchSession(session, { status: BAILEYS_STATUS.CONNECTING, lastError: "" });
 
   try {
-    ensureRoot();
-    const authDir = getAuthDir(id);
-    if (!fs.existsSync(authDir)) fs.mkdirSync(authDir, { recursive: true });
-
-    const { state, saveCreds } = await baileysUseMultiFileAuthState(authDir);
+    const { state, saveCreds } = await useFirestoreAuthState(id);
     if (state.creds?.me?.id) {
       patchSession(session, { phone: state.creds.me.id.split("@")[0] });
     }
@@ -93,6 +90,7 @@ export async function connectBaileysSession(sessionId = config.baileysSessionId)
           lastError: "",
           phone: sock.user?.id ? sock.user.id.split("@")[0] : session.phone
         });
+        session.reconnectAttempts = 0;
         console.log("[baileys] connected", { sessionId: id, phone: session.phone || null });
       }
 
@@ -103,7 +101,9 @@ export async function connectBaileysSession(sessionId = config.baileysSessionId)
         session.sock = null;
 
         if (loggedOut) {
-          clearAuthDir(id);
+          clearFirestoreAuthState(id).catch((clearError) => {
+            console.error("[baileys] no se pudo borrar la sesion", { sessionId: id, error: clearError.message });
+          });
           patchSession(session, {
             status: BAILEYS_STATUS.LOGGED_OUT,
             qr: null,
@@ -120,15 +120,7 @@ export async function connectBaileysSession(sessionId = config.baileysSessionId)
           lastError: lastDisconnect?.error?.message || "Conexion cerrada."
         });
 
-        if (!session.reconnectTimer) {
-          const delay = Math.floor(Math.random() * 8000) + 5000;
-          session.reconnectTimer = setTimeout(() => {
-            session.reconnectTimer = null;
-            connectBaileysSession(id).catch((error) => {
-              console.error("[baileys] reconnect failed", { sessionId: id, error: error.message });
-            });
-          }, delay);
-        }
+        scheduleReconnect(id, session);
       }
     });
 
@@ -148,6 +140,65 @@ export async function connectBaileysSession(sessionId = config.baileysSessionId)
     throw error;
   } finally {
     session.starting = false;
+  }
+}
+
+function scheduleReconnect(sessionId, session) {
+  if (session.reconnectTimer) return;
+
+  session.reconnectAttempts = Number(session.reconnectAttempts || 0) + 1;
+  const backoff = Math.min(RECONNECT_BASE_MS * 2 ** (session.reconnectAttempts - 1), RECONNECT_MAX_MS);
+  const delay = backoff + Math.floor(Math.random() * 3000);
+
+  console.log("[baileys] reconectando", { sessionId, attempt: session.reconnectAttempts, delayMs: delay });
+
+  session.reconnectTimer = setTimeout(() => {
+    session.reconnectTimer = null;
+    connectBaileysSession(sessionId).catch((error) => {
+      console.error("[baileys] reconnect failed", { sessionId, error: error.message });
+      // Sin esto un fallo al reconectar dejaba la sesion muerta hasta el proximo deploy.
+      scheduleReconnect(sessionId, session);
+    });
+  }, delay);
+
+  session.reconnectTimer.unref?.();
+}
+
+/**
+ * Red de seguridad: revisa cada minuto que toda sesion guardada en Firestore
+ * siga conectada y la levanta si no. Cubre los casos que el evento
+ * connection.update no alcanza a ver (caidas duras, reinicios del contenedor).
+ */
+export function startBaileysWatchdog(intervalMs = 60000) {
+  if (watchdogTimer) return;
+
+  watchdogTimer = setInterval(() => {
+    ensureSessionsConnected().catch((error) => {
+      console.error("[baileys] watchdog failed", { error: error.message });
+    });
+  }, intervalMs);
+
+  watchdogTimer.unref?.();
+  console.log("[baileys] watchdog activo", { intervalMs });
+}
+
+async function ensureSessionsConnected() {
+  const sessionIds = await listFirestoreSessionIds();
+
+  for (const sessionId of sessionIds) {
+    const id = sanitizeSessionId(sessionId);
+    const session = sessions.get(id);
+    const status = session?.status;
+
+    if (session?.starting || session?.reconnectTimer) continue;
+    if (status === BAILEYS_STATUS.CONNECTED || status === BAILEYS_STATUS.CONNECTING || status === BAILEYS_STATUS.QR) {
+      continue;
+    }
+
+    console.warn("[baileys] watchdog: sesion caida, reconectando", { sessionId: id, status: status || "sin-socket" });
+    await connectBaileysSession(id).catch((error) => {
+      console.error("[baileys] watchdog reconnect failed", { sessionId: id, error: error.message });
+    });
   }
 }
 
@@ -192,7 +243,7 @@ export async function logoutBaileysSession(sessionId = config.baileysSessionId) 
     console.warn("[baileys] logout ignored", { sessionId: id, error: error.message });
   }
 
-  clearAuthDir(id);
+  await clearFirestoreAuthState(id);
   patchSession(session, {
     sock: null,
     qr: null,
@@ -206,32 +257,25 @@ export async function logoutBaileysSession(sessionId = config.baileysSessionId) 
 }
 
 export async function restoreBaileysSessions() {
-  ensureRoot();
-  let restored = 0;
+  let sessionIds = [];
 
-  for (const entry of fs.readdirSync(config.baileysSessionsRoot, { withFileTypes: true })) {
-    if (!entry.isDirectory()) continue;
-    const sessionId = entry.name;
-    const credsPath = path.join(config.baileysSessionsRoot, sessionId, "creds.json");
-    if (!fs.existsSync(credsPath)) continue;
+  try {
+    sessionIds = await listFirestoreSessionIds();
+  } catch (error) {
+    console.error("[baileys] no se pudieron listar sesiones guardadas", { error: error.message });
+    return 0;
+  }
 
-    try {
-      sanitizeSessionId(sessionId);
-    } catch {
-      console.warn("[baileys] session folder ignored", { sessionId });
-      continue;
-    }
-
-    restored += 1;
+  sessionIds.forEach((sessionId, index) => {
     setTimeout(() => {
       connectBaileysSession(sessionId).catch((error) => {
         console.error("[baileys] restore failed", { sessionId, error: error.message });
       });
-    }, restored * 400);
-  }
+    }, (index + 1) * 400);
+  });
 
-  console.log("[baileys] restoring sessions", { root: config.baileysSessionsRoot, restored });
-  return restored;
+  console.log("[baileys] restaurando sesiones desde Firestore", { restored: sessionIds.length, sessionIds });
+  return sessionIds.length;
 }
 
 export async function sendBaileysText({ phone, message, sessionId = config.baileysSessionId }) {
@@ -390,6 +434,7 @@ function getOrInitSession(sessionId) {
       lastError: "",
       starting: false,
       reconnectTimer: null,
+      reconnectAttempts: 0,
       updatedAt: Date.now()
     };
     sessions.set(id, session);
@@ -413,24 +458,8 @@ function requireSock(sessionId) {
   return session.sock;
 }
 
-function ensureRoot() {
-  if (!fs.existsSync(config.baileysSessionsRoot)) {
-    fs.mkdirSync(config.baileysSessionsRoot, { recursive: true });
-  }
-}
 
-function clearAuthDir(sessionId) {
-  const authDir = getAuthDir(sessionId);
-  if (!fs.existsSync(authDir)) return;
 
-  for (const file of fs.readdirSync(authDir)) {
-    fs.rmSync(path.join(authDir, file), { force: true, recursive: true });
-  }
-}
-
-function getAuthDir(sessionId) {
-  return path.join(config.baileysSessionsRoot, sanitizeSessionId(sessionId));
-}
 
 function sanitizeSessionId(sessionId) {
   const id = String(sessionId || "").trim();

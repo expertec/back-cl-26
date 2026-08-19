@@ -7,7 +7,8 @@ import {
   getBaileysSessionState,
   logoutBaileysSession,
   restoreBaileysSessions,
-  setBaileysInboundHandler
+  setBaileysInboundHandler,
+  startBaileysWatchdog
 } from "../services/whatsapp/baileysSessionService.js";
 
 export const whatsappRouter = Router();
@@ -43,15 +44,17 @@ export async function bootstrapWhatsappProvider() {
     });
   });
 
-  await restoreBaileysSessions();
-  if (config.whatsappProvider === "baileys") {
+  const restored = await restoreBaileysSessions();
+  if (config.whatsappProvider === "baileys" && !restored) {
     await connectBaileysSession(config.baileysSessionId);
   }
+
+  startBaileysWatchdog();
 
   console.log("[whatsapp/bootstrap] listo", {
     provider: config.whatsappProvider,
     sessionId: config.baileysSessionId,
-    sessionsRoot: config.baileysSessionsRoot
+    authStore: "firestore"
   });
 }
 

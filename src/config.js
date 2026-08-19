@@ -29,8 +29,6 @@ export const config = {
   deliveryApiToken: process.env.DELIVERY_API_TOKEN || "",
   whatsappProvider,
   baileysSessionId: process.env.BAILEYS_SESSION_ID || process.env.WA_SESSION_ID || "cantalab",
-  baileysSessionsRoot:
-    process.env.BAILEYS_SESSIONS_ROOT || process.env.WA_SESSIONS_ROOT || `${process.env.TMP_DIR || "/tmp/cantalab"}/wa-sessions`,
   enableBaileys: process.env.ENABLE_BAILEYS !== "false" && (process.env.ENABLE_BAILEYS === "true" || whatsappProvider === "baileys"),
   vevWhatsappApiUrl: (process.env.VEV_WHATSAPP_API_URL || "https://vev-crm-viy5.onrender.com").replace(/\/$/, ""),
   vevWhatsappToken: process.env.VEV_WHATSAPP_TOKEN || "",
