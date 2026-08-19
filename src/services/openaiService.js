@@ -1,5 +1,7 @@
-import OpenAI from "openai";
+import OpenAI, { toFile } from "openai";
 import { config } from "../config.js";
+
+const MAX_AUDIO_BYTES = 24 * 1024 * 1024;
 
 let client;
 
@@ -147,4 +149,24 @@ export async function createJsonChatCompletion({ system, user, temperature = 0.2
   const content = response.choices[0]?.message?.content?.trim();
   if (!content) throw new Error("OpenAI no devolvio JSON.");
   return JSON.parse(content);
+}
+
+/**
+ * Transcribe las notas de voz: muchos clientes cuentan la historia hablando en
+ * vez de escribir, y esos mensajes se descartaban enteros.
+ */
+export async function transcribeAudio(buffer, filename = "nota-de-voz.ogg") {
+  if (!buffer?.length) throw new Error("Audio vacio.");
+  if (buffer.length > MAX_AUDIO_BYTES) {
+    throw new Error(`Audio demasiado grande para transcribir: ${buffer.length} bytes.`);
+  }
+
+  const file = await toFile(buffer, filename);
+  const response = await getClient().audio.transcriptions.create({
+    file,
+    model: config.openaiTranscribeModel,
+    language: "es"
+  });
+
+  return String(response?.text || "").trim();
 }

@@ -7,6 +7,7 @@ import {
 import Pino from "pino";
 import QRCode from "qrcode";
 import { config } from "../../config.js";
+import { transcribeAudio } from "../openaiService.js";
 import { getWhatsAppWebVersion } from "./baileysVersion.js";
 import { clearFirestoreAuthState, listFirestoreSessionIds, useFirestoreAuthState } from "./firestoreAuthState.js";
 
@@ -364,7 +365,16 @@ function shouldProcessMessage(message, type, now) {
 
 async function normalizeBaileysMessage(message, sessionId) {
   const { jid, phoneJid, lid } = resolveAddressing(message.key);
-  const text = extractMessageText(message.message);
+  let text = extractMessageText(message.message);
+  let transcribed = false;
+
+  if (!text) {
+    const transcription = await transcribeVoiceNote(message, sessionId);
+    if (transcription) {
+      text = transcription;
+      transcribed = true;
+    }
+  }
   const messageId = message.key.id;
   const timestampMs = getMessageTimestampMs(message);
 
@@ -376,6 +386,7 @@ async function normalizeBaileysMessage(message, sessionId) {
     text,
     contactName: message.pushName || "",
     timestamp: timestampMs,
+    transcribed,
     jid,
     lid,
     raw: {
@@ -385,6 +396,36 @@ async function normalizeBaileysMessage(message, sessionId) {
       message: message.message
     }
   };
+}
+
+/**
+ * Sin esto una nota de voz llegaba sin texto y el mensaje se descartaba entero:
+ * el cliente hablaba y el bot no respondia nada.
+ */
+async function transcribeVoiceNote(message, sessionId) {
+  const content = unwrapEphemeral(message.message || {});
+  const audio = content.audioMessage;
+  if (!audio) return "";
+
+  try {
+    const buffer = await downloadBaileysMedia(message, sessionId);
+    const text = await transcribeAudio(buffer, "nota-de-voz.ogg");
+
+    console.log("[baileys] nota de voz transcrita", {
+      sessionId,
+      seconds: audio.seconds || null,
+      bytes: buffer?.length || 0,
+      chars: text.length
+    });
+
+    return text;
+  } catch (error) {
+    console.error("[baileys] no se pudo transcribir la nota de voz", {
+      sessionId,
+      error: error.message
+    });
+    return "";
+  }
 }
 
 function extractMessageText(message = {}) {

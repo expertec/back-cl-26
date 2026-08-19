@@ -84,6 +84,8 @@ export function normalizeIncomingMessage(payload = {}) {
       text: String(payload.text || "").trim(),
       contactName: payload.contactName || "",
       timestamp: payload.timestamp || Date.now(),
+      sessionId: payload.sessionId || "",
+      transcribed: Boolean(payload.transcribed),
       jid: payload.jid || "",
       lid: payload.lid || "",
       raw: payload.raw || payload

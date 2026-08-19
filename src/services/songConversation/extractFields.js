@@ -1,5 +1,5 @@
 import { createJsonChatCompletion } from "../openaiService.js";
-import { INTENTS, VALID_ORDER_FIELDS } from "./constants.js";
+import { CONVERSATION_STAGES, INTENTS, VALID_ORDER_FIELDS } from "./constants.js";
 
 const EMPTY_RESULT = {
   intent: INTENTS.UNKNOWN,
@@ -55,7 +55,7 @@ export async function extractFields({ messageText, order, conversation, recentMe
       maxTokens: 450
     });
 
-    const normalized = normalizeExtraction(result, messageText);
+    const normalized = normalizeExtraction(result, messageText, conversation?.stage);
 
     if (!Object.keys(normalized.extractedFields).length) {
       console.warn("[conversation] extraccion sin campos; revisar respuesta de OpenAI", {
@@ -68,11 +68,11 @@ export async function extractFields({ messageText, order, conversation, recentMe
     return normalized;
   } catch (error) {
     console.warn("[conversation] OpenAI extraction failed; using fallback", { message: error.message });
-    return heuristicExtraction(messageText);
+    return heuristicExtraction(messageText, conversation?.stage);
   }
 }
 
-function normalizeExtraction(result, messageText) {
+function normalizeExtraction(result, messageText, stage) {
   const sourceFields = findExtractedFields(result);
   const extractedFields = {};
 
@@ -84,16 +84,24 @@ function normalizeExtraction(result, messageText) {
   }
 
   // La heuristica local cubre lo que el modelo deja fuera; nunca pisa lo que ya extrajo.
-  const heuristic = heuristicExtraction(messageText);
+  const heuristic = heuristicExtraction(messageText, stage);
   for (const [field, value] of Object.entries(heuristic.extractedFields)) {
     if (!extractedFields[field]) extractedFields[field] = value;
   }
 
-  const intent = normalizeIntent(result?.intent);
+  const modelIntent = normalizeIntent(result?.intent);
+  // Un "ok" o un 👍 pesan mas que lo que el modelo haya decidido: si el cliente
+  // aprobo y no lo detectamos, la conversacion se queda esperando para siempre.
+  const intent =
+    heuristic.intent === INTENTS.APPROVE_LYRICS
+      ? INTENTS.APPROVE_LYRICS
+      : modelIntent === INTENTS.UNKNOWN
+        ? heuristic.intent
+        : modelIntent;
 
   return {
     ...EMPTY_RESULT,
-    intent: intent === INTENTS.UNKNOWN ? heuristic.intent : intent,
+    intent,
     extractedFields,
     confidence: clampConfidence(result?.confidence),
     suggestedReply: typeof result?.suggestedReply === "string" ? result.suggestedReply.trim() : "",
@@ -194,6 +202,44 @@ const GENRES = [
   [/rap|hip hop/, "rap"]
 ];
 
+const APPROVAL_EMOJIS = /[\u{1F44D}\u{1F44F}\u{1F64C}\u{2764}\u{1F60D}\u{1F525}\u{2705}\u{1F929}\u{1F970}\u{1F495}\u{1F44C}\u{1F642}\u{1F60A}\u{1F62D}]/u;
+const REJECTION_EMOJIS = /[\u{1F44E}\u{1F615}\u{1F914}\u{1F612}\u{274C}]/u;
+const APPROVAL_WORDS = new Set([
+  "ok", "okay", "oka", "okey", "va", "vale", "dale", "sale", "listo", "bien", "bueno",
+  "si", "sii", "siii", "sip", "claro", "correcto", "exacto", "genial", "excelente",
+  "perfecto", "perfecta", "hermoso", "hermosa", "bonito", "bonita", "padre", "chido",
+  "gracias", "adelante", "aprobado", "aprobada", "quedo", "asi", "esta", "me", "gusta",
+  "encanta", "encanto", "amo", "buenisima", "buenisimo", "increible", "wow", "gustó"
+]);
+
+/**
+ * Respuestas cortas de conformidad: "ok", "me gusta", "quedo padre", "👍".
+ * No basta con una lista de frases exactas porque cada cliente lo escribe
+ * distinto, asi que se acepta cualquier mensaje corto compuesto solo de
+ * palabras de aprobacion y/o emojis positivos.
+ */
+function isShortApproval(text = "") {
+  const raw = String(text).trim();
+  if (!raw || raw.length > 60) return false;
+  if (REJECTION_EMOJIS.test(raw)) return false;
+  if (/\b(no|pero|cambia|corrige|mejor|quita|agrega|falta)\b/i.test(raw)) return false;
+
+  const hasApprovalEmoji = APPROVAL_EMOJIS.test(raw);
+
+  const words = raw
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .replace(/[^a-z\s]/g, " ")
+    .split(/\s+/)
+    .filter(Boolean);
+
+  if (!words.length) return hasApprovalEmoji;
+  if (words.length > 6) return false;
+
+  return words.every((word) => APPROVAL_WORDS.has(word));
+}
+
 function matchPurpose(lower) {
   return PURPOSES.find(([pattern]) => pattern.test(lower))?.[1] || "";
 }
@@ -219,12 +265,15 @@ function clampConfidence(value) {
   return Math.max(0, Math.min(1, number));
 }
 
-function heuristicExtraction(text = "") {
+function heuristicExtraction(text = "", stage = "") {
   const lower = text.toLowerCase();
   const extractedFields = {};
   let intent = INTENTS.PROVIDE_INFORMATION;
 
-  if (/(perfecta|perfecto|aprobada|aprobado|me gusta asi|asi esta bien|dale|va)/i.test(text)) {
+  // Esperando el visto bueno, la mayoria responde corto: "ok", "me gusta", "👍".
+  if (stage === CONVERSATION_STAGES.WAITING_LYRICS_APPROVAL && isShortApproval(text)) {
+    intent = INTENTS.APPROVE_LYRICS;
+  } else if (/(perfecta|perfecto|aprobada|aprobado|me gusta asi|asi esta bien|dale|va)/i.test(text)) {
     intent = INTENTS.APPROVE_LYRICS;
   } else if (/(cambia|corrige|modifica|quita|agrega|ponle)/i.test(text)) {
     intent = INTENTS.REQUEST_LYRICS_CHANGE;

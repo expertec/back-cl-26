@@ -1,6 +1,7 @@
 import { Router } from "express";
 import { config } from "../config.js";
 import { normalizeIncomingMessage } from "../services/whatsapp/index.js";
+import { bufferIncomingMessage } from "../services/whatsapp/inboundBuffer.js";
 import { processIncomingWhatsappMessage } from "../services/songConversation/index.js";
 import {
   connectBaileysSession,
@@ -31,16 +32,20 @@ export async function bootstrapWhatsappProvider() {
       provider: incoming.provider,
       phone: incoming.phone,
       messageId: incoming.messageId,
-      chars: incoming.text.length
+      chars: incoming.text.length,
+      ...(payload.transcribed ? { transcrito: true } : {})
     });
 
-    const result = await processIncomingWhatsappMessage(incoming);
+    await bufferIncomingMessage(incoming, async (merged) => {
+      const result = await processIncomingWhatsappMessage(merged);
 
-    console.log("[whatsapp/inbound] procesado", {
-      phone: incoming.phone,
-      stage: result.stage || null,
-      replied: Boolean(result.reply),
-      skipped: result.skipped || result.duplicate || false
+      console.log("[whatsapp/inbound] procesado", {
+        phone: merged.phone,
+        mensajes: merged.bufferedCount || 1,
+        stage: result.stage || null,
+        replied: Boolean(result.reply),
+        skipped: result.skipped || result.duplicate || false
+      });
     });
   });
 

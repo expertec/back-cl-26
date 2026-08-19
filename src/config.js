@@ -11,6 +11,7 @@ export const config = {
   frontendOrigin: process.env.FRONTEND_ORIGIN || "http://localhost:3000",
   openaiApiKey: process.env.OPENAI_API_KEY || "",
   openaiModel: process.env.OPENAI_MODEL || "gpt-4o-mini",
+  openaiTranscribeModel: process.env.OPENAI_TRANSCRIBE_MODEL || "whisper-1",
   sunoApiKey: process.env.SUNO_API_KEY || "",
   sunoBaseUrl: process.env.SUNO_BASE_URL || "https://api.sunoapi.org/api/v1",
   sunoModel: process.env.SUNO_MODEL || "V4_5ALL",
@@ -36,6 +37,10 @@ export const config = {
   kanwapApiUrl: (process.env.KANWAP_API_URL || "https://kanwap.udelonline.com").replace(/\/$/, ""),
   kanwapApiKey: process.env.KANWAP_API_KEY || "",
   kanwapSessionId: process.env.KANWAP_SESION_ID || "",
+  // Cuanto se espera a que el contacto termine de escribir antes de responder.
+  inboundDebounceMs: Number(process.env.INBOUND_DEBOUNCE_MS || 8000),
+  inboundBufferMaxWaitMs: Number(process.env.INBOUND_BUFFER_MAX_WAIT_MS || 45000),
+  inboundBufferMaxMessages: Number(process.env.INBOUND_BUFFER_MAX_MESSAGES || 8),
   enableCron: process.env.ENABLE_CRON !== "false",
   jobSecret: process.env.JOB_SECRET || ""
 };
