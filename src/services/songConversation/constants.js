@@ -54,3 +54,47 @@ export const INTENTS = {
   BUYING_SIGNAL: "buying_signal",
   UNKNOWN: "unknown"
 };
+
+// Mismo catalogo que ofrecia el formulario web, para que el chat lo reemplace
+// sin perder calidad de brief.
+export const PURPOSE_OPTIONS = [
+  "Declarar mi amor",
+  "Decirle que la/o quiero",
+  "Desamor",
+  "Motivacion y Superacion Personal",
+  "Homenajes",
+  "Memoriales",
+  "Agradecer su Amistad",
+  "Despedida",
+  "Un Aniversario",
+  "Agradecer",
+  "Reconocimientos y Logros",
+  "Felicitacion por Cumpleanos",
+  "Propuesta de Matrimonio",
+  "Nacimiento de un Bebe",
+  "Dia de la Madre o del Padre"
+];
+
+export const GENRE_OPTIONS = [
+  "Corrido tumbado",
+  "Balada Romantica",
+  "Regional Mexicano",
+  "Pop",
+  "Corrido Norteno",
+  "Rock Pop",
+  "Regueton",
+  "Bachata",
+  "Rap",
+  "Salsa",
+  "Rock",
+  "Cumbia",
+  "Banda"
+];
+
+export const VOICE_OPTIONS = ["Voz Femenina", "Voz Masculina", "Cualquiera"];
+
+export const WELCOME_MESSAGE = [
+  "Hola, soy el asistente de Cantalab.",
+  "Te hago tu cancion personalizada aqui mismo, sin formularios.",
+  "Te hago unas preguntas rapidas y en unos minutos te mando dos versiones para que elijas."
+].join(" ");

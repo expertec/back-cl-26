@@ -4,7 +4,7 @@ import { normalizePhone } from "../../schemas.js";
 import { createLyrics, reviseLyrics } from "../openaiService.js";
 import { startSongProduction } from "../songProduction.js";
 import { sendText } from "../whatsapp/index.js";
-import { COLLECTIONS, CONVERSATION_STAGES, INTENTS } from "./constants.js";
+import { COLLECTIONS, CONVERSATION_STAGES, INTENTS, WELCOME_MESSAGE } from "./constants.js";
 import { setConversationStage } from "./conversationState.js";
 import { updateConversationSummary } from "./conversationSummary.js";
 import { extractFields } from "./extractFields.js";
@@ -202,11 +202,16 @@ async function handlePostApprovalMessage({ context, incoming }) {
 
 async function continueDiscovery({ context, incoming, missingFields }) {
   const nextField = selectNextField(missingFields, context.conversation.lastAskedFields || []);
-  const reply = await generateNextQuestion({
+  const question = await generateNextQuestion({
     missingFields,
     order: context.order,
     conversation: context.conversation
   });
+
+  // El lead llega de una campana con un mensaje predefinido: hay que presentarse
+  // antes de empezar a preguntar.
+  const isFirstContact = context.conversation.stage === CONVERSATION_STAGES.NEW_LEAD;
+  const reply = isFirstContact ? [WELCOME_MESSAGE, "", question].join("\n") : question;
 
   await setConversationStage({
     conversationRef: context.conversationRef,
@@ -546,9 +551,27 @@ async function saveConversationMessage({ conversationId, direction, text, provid
     direction,
     text,
     providerMessageId: providerMessageId || null,
-    raw: raw || null,
+    raw: toPlainJson(raw),
     createdAt: FieldValue.serverTimestamp()
   });
+}
+
+/**
+ * Baileys entrega instancias de protobuf (WebMessageInfo) y Firestore solo
+ * acepta objetos planos: guardarlas directo tumbaba la conversacion entera
+ * despues de haber enviado el mensaje.
+ */
+function toPlainJson(value, maxChars = 20000) {
+  if (!value) return null;
+
+  try {
+    const json = JSON.stringify(value);
+    if (!json) return null;
+    if (json.length > maxChars) return { truncated: true, preview: json.slice(0, 1000) };
+    return JSON.parse(json);
+  } catch (error) {
+    return { serializationError: error.message };
+  }
 }
 
 async function sendAndSaveReply({ context, incoming, reply, suffix }) {

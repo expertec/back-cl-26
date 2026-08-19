@@ -1,11 +1,21 @@
 import { createJsonChatCompletion } from "../openaiService.js";
+import { GENRE_OPTIONS, PURPOSE_OPTIONS, VOICE_OPTIONS } from "./constants.js";
 import { getFieldLabel } from "./getMissingFields.js";
 
+// Solo se ofrecen algunas opciones: una lista de 15 en WhatsApp no se lee.
+const FIELD_OPTIONS = {
+  purpose: PURPOSE_OPTIONS,
+  genre: GENRE_OPTIONS,
+  voiceType: VOICE_OPTIONS
+};
+
 const FALLBACK_QUESTIONS = {
-  purpose: "Claro. Para ubicar la emocion correcta, ¿para que ocasion o motivo quieres la cancion?",
+  purpose:
+    "Claro. ¿Para que ocasion la quieres? Por ejemplo: declarar tu amor, un aniversario, cumpleanos, homenaje o agradecer.",
   recipient: "¿Para quien es la cancion? Puedes decirme su nombre, apodo o relacion contigo.",
   story: "Cuéntame un detalle o recuerdo que quieras que aparezca en la letra.",
-  genre: "¿Tienes algun genero o artista de referencia para el estilo?",
+  genre:
+    "¿Que estilo prefieres? Regional mexicano, corrido tumbado, balada romantica, pop, cumbia, banda, regueton... o dime un artista que te guste.",
   voiceType: "¿Prefieres voz masculina, femenina o te da igual?",
   clientName: "¿Cual es tu nombre para guardar el pedido?"
 };
@@ -21,6 +31,10 @@ export async function generateNextQuestion({ missingFields, order, conversation 
       user: {
         nextMissingField: nextField,
         nextMissingFieldMeaning: getFieldLabel(nextField),
+        opcionesSugeridas: FIELD_OPTIONS[nextField] || null,
+        instruccionOpciones: FIELD_OPTIONS[nextField]
+          ? "Menciona 4 o 5 opciones como ejemplo, en lenguaje natural, sin listas numeradas."
+          : null,
         knownOrder: order,
         summary: conversation.summary || "",
         lastAskedFields: conversation.lastAskedFields || []
