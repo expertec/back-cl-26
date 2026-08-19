@@ -13,17 +13,46 @@ import {
 export const whatsappRouter = Router();
 
 export async function bootstrapWhatsappProvider() {
-  if (!config.enableBaileys) return;
+  if (!config.enableBaileys) {
+    console.warn(
+      "[whatsapp/bootstrap] Baileys deshabilitado: los mensajes entrantes NO se van a procesar.",
+      {
+        whatsappProvider: config.whatsappProvider,
+        fix: "Define WHATSAPP_PROVIDER=baileys (o ENABLE_BAILEYS=true) y redespliega."
+      }
+    );
+    return;
+  }
 
   setBaileysInboundHandler(async (payload) => {
     const incoming = normalizeIncomingMessage(payload);
-    await processIncomingWhatsappMessage(incoming);
+    console.log("[whatsapp/inbound]", {
+      provider: incoming.provider,
+      phone: incoming.phone,
+      messageId: incoming.messageId,
+      chars: incoming.text.length
+    });
+
+    const result = await processIncomingWhatsappMessage(incoming);
+
+    console.log("[whatsapp/inbound] procesado", {
+      phone: incoming.phone,
+      stage: result.stage || null,
+      replied: Boolean(result.reply),
+      skipped: result.skipped || result.duplicate || false
+    });
   });
 
   await restoreBaileysSessions();
   if (config.whatsappProvider === "baileys") {
     await connectBaileysSession(config.baileysSessionId);
   }
+
+  console.log("[whatsapp/bootstrap] listo", {
+    provider: config.whatsappProvider,
+    sessionId: config.baileysSessionId,
+    sessionsRoot: config.baileysSessionsRoot
+  });
 }
 
 whatsappRouter.post("/incoming", async (req, res) => {
@@ -60,6 +89,7 @@ whatsappRouter.post("/session/connect", async (req, res) => {
 whatsappRouter.get("/session", (req, res) => {
   try {
     const session = getBaileysSessionState(req.query.sessionId || config.baileysSessionId);
+    res.set("Cache-Control", "no-store");
     return res.json({ ok: true, session });
   } catch (error) {
     return res.status(400).json({

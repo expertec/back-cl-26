@@ -2,6 +2,7 @@ import crypto from "node:crypto";
 import { db, FieldValue } from "../../firebase.js";
 import { normalizePhone } from "../../schemas.js";
 import { createLyrics, reviseLyrics } from "../openaiService.js";
+import { startSongProduction } from "../songProduction.js";
 import { sendText } from "../whatsapp/index.js";
 import { COLLECTIONS, CONVERSATION_STAGES, INTENTS } from "./constants.js";
 import { setConversationStage } from "./conversationState.js";
@@ -9,6 +10,13 @@ import { updateConversationSummary } from "./conversationSummary.js";
 import { extractFields } from "./extractFields.js";
 import { generateNextQuestion, selectNextField } from "./generateNextQuestion.js";
 import { getMissingFields } from "./getMissingFields.js";
+import { buildSongForLyrics } from "./songBrief.js";
+
+const POST_APPROVAL_STAGES = new Set([
+  CONVERSATION_STAGES.LYRICS_APPROVED,
+  CONVERSATION_STAGES.PRODUCING_SONG,
+  CONVERSATION_STAGES.SAMPLES_SENT
+]);
 
 export async function processIncomingWhatsappMessage(incoming) {
   if (!incoming.phone || !incoming.text) {
@@ -158,12 +166,38 @@ async function handleAiConversation({ context, incoming }) {
     return buildResult(context, reply, CONVERSATION_STAGES.READY_FOR_SALES);
   }
 
+  if (POST_APPROVAL_STAGES.has(context.conversation.stage)) {
+    return handlePostApprovalMessage({ context, incoming });
+  }
+
   const missingFields = getMissingFields(context.order);
   if (missingFields.length) {
     return continueDiscovery({ context, incoming, missingFields });
   }
 
   return completeBriefAndGenerateLyrics({ context, incoming });
+}
+
+/**
+ * Con la letra ya aprobada no hay que volver a generar nada: sin esta rama el
+ * flujo caia en completeBriefAndGenerateLyrics, el lock devolvia "lyrics-exist"
+ * y el bot se quedaba mudo ademas de regresar el lead a "Revisando letra".
+ */
+async function handlePostApprovalMessage({ context, incoming }) {
+  const stage = context.conversation.stage;
+  const reply =
+    stage === CONVERSATION_STAGES.SAMPLES_SENT
+      ? "Ya te envie las versiones con marca de agua. Si quieres la cancion completa en alta calidad, te paso con el equipo."
+      : "Tu cancion ya se esta produciendo. En cuanto este te mando las versiones por aqui.";
+
+  await sendAndSaveReply({ context, incoming, reply, suffix: `post-approval-${stage}` });
+
+  // Si la produccion nunca arranco (error previo o deploy a medias), reintentamos.
+  if (stage !== CONVERSATION_STAGES.SAMPLES_SENT && !context.order.musicId) {
+    await triggerSongProduction(context);
+  }
+
+  return buildResult(context, reply, stage);
 }
 
 async function continueDiscovery({ context, incoming, missingFields }) {
@@ -261,11 +295,19 @@ async function handleLyricsApprovalIntent({ context, incoming, extraction }) {
     await setConversationStage({
       conversationRef: context.conversationRef,
       leadRef: context.leadRef,
-      stage: CONVERSATION_STAGES.LYRICS_APPROVED
+      stage: CONVERSATION_STAGES.PRODUCING_SONG
     });
-    const reply = "Perfecto, dejo la letra aprobada. El siguiente paso es producir la musica.";
+
+    const reply = [
+      "Perfecto, letra aprobada.",
+      "",
+      "Ya estoy produciendo la musica. En unos minutos te mando dos versiones por aqui para que elijas."
+    ].join("\n");
     await sendAndSaveReply({ context, incoming, reply, suffix: "lyrics-approved" });
-    return buildResult(context, reply, CONVERSATION_STAGES.LYRICS_APPROVED);
+
+    await triggerSongProduction(context);
+
+    return buildResult(context, reply, CONVERSATION_STAGES.PRODUCING_SONG);
   }
 
   if (extraction.intent === INTENTS.REQUEST_LYRICS_CHANGE) {
@@ -582,34 +624,29 @@ async function lockOrderForRevision(orderRef) {
   });
 }
 
-function buildSongForLyrics(order, lead) {
-  const recipientName = order.nickname || order.recipient || "destinatario";
-  const storyParts = [
-    order.story,
-    order.relationship ? `Relacion: ${order.relationship}` : "",
-    order.specialDetails ? `Detalles especiales: ${order.specialDetails}` : ""
-  ].filter(Boolean);
+async function triggerSongProduction(context) {
+  try {
+    const result = await startSongProduction({
+      order: context.order,
+      orderRef: context.orderRef,
+      lead: context.lead,
+      leadId: context.leadRef.id,
+      conversationId: context.conversationRef.id
+    });
 
-  return {
-    title: buildTitle(order),
-    occasion: order.purpose || "cancion personalizada",
-    recipientName,
-    customerName: order.clientName || lead.name || "cliente",
-    language: "Espanol",
-    story: storyParts.join("\n"),
-    genre: order.genre || (order.referenceArtist ? `estilo inspirado en ${order.referenceArtist}` : "balada pop"),
-    referenceArtist: order.referenceArtist || "",
-    voiceType: order.voiceType || "Cualquiera",
-    mood: "Emotiva, clara y cercana",
-    negativeTags: "Heavy metal, gritos, audio distorsionado"
-  };
-}
+    if (result.musicId) {
+      context.order = { ...context.order, musicId: result.musicId };
+    }
 
-function buildTitle(order) {
-  const recipient = order.nickname || order.recipient;
-  if (recipient) return `Cancion para ${recipient}`;
-  if (order.purpose) return `Cancion de ${order.purpose}`;
-  return "Cancion personalizada";
+    return result;
+  } catch (error) {
+    // El lead ya recibio su confirmacion; un fallo aqui no debe tumbar la conversacion.
+    console.error("[conversation] no se pudo iniciar la produccion", {
+      songOrderId: context.orderRef.id,
+      error: error.message
+    });
+    return { started: false, reason: error.message };
+  }
 }
 
 function buildLyricsApprovalMessage(lyrics, intro = "Ya tengo una primera letra:") {

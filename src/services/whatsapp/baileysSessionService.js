@@ -27,6 +27,7 @@ const sessions = new Map();
 const processedInMemory = new Map();
 const logger = Pino({ level: process.env.BAILEYS_LOG_LEVEL || process.env.WA_LOG_LEVEL || "warn" });
 let inboundHandler = null;
+let warnedMissingHandler = false;
 
 export function setBaileysInboundHandler(handler) {
   inboundHandler = typeof handler === "function" ? handler : null;
@@ -170,7 +171,7 @@ export function getBaileysSessionState(sessionId = config.baileysSessionId) {
     qr: session.status === BAILEYS_STATUS.QR ? session.qr : null,
     qrDataUrl: session.status === BAILEYS_STATUS.QR ? session.qrDataUrl : null,
     qrAt: session.qrAt || null,
-    phone: session.phone || null,
+    phone: cleanSessionPhone(session.phone),
     lastError: session.lastError || "",
     updatedAt: session.updatedAt
   };
@@ -271,7 +272,16 @@ export async function markBaileysMessageAsRead({ jid, messageId, sessionId = con
 }
 
 async function handleMessagesUpsert(sessionId, { messages, type }) {
-  if (!inboundHandler) return;
+  if (!inboundHandler) {
+    if (!warnedMissingHandler) {
+      warnedMissingHandler = true;
+      console.warn(
+        "[baileys] llegan mensajes pero no hay handler registrado; se estan descartando.",
+        { sessionId, fix: "Define WHATSAPP_PROVIDER=baileys (o ENABLE_BAILEYS=true) y reinicia." }
+      );
+    }
+    return;
+  }
   if (!["notify", "append", "prepend"].includes(type || "")) return;
 
   const now = Date.now();
@@ -439,6 +449,10 @@ function toJid(phone) {
 
 function jidToPhone(jid) {
   return String(jid || "").split("@")[0].replace(/\D/g, "");
+}
+
+function cleanSessionPhone(phone) {
+  return String(phone || "").split(":")[0] || null;
 }
 
 export async function downloadBaileysMedia(message, sessionId = config.baileysSessionId) {

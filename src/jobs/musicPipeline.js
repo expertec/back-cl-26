@@ -4,6 +4,7 @@ import { createLyrics, createMusicPrompt } from "../services/openaiService.js";
 import { extractAudioUrlsFromRecordInfo, getSunoGenerationDetails, submitSunoSong } from "../services/sunoService.js";
 import { createWatermarkedClip, persistFullAudio } from "../services/audioService.js";
 import { sendSongWithWhatsapp } from "../services/whatsappDeliveryService.js";
+import { markSongDelivered } from "../services/songProduction.js";
 
 const MUSIC_COLLECTION = "musica";
 const RETRYABLE_SUNO_FAILURES = new Set(["CREATE_TASK_FAILED", "GENERATE_AUDIO_FAILED", "CALLBACK_EXCEPTION", "FAILED"]);
@@ -448,6 +449,9 @@ export async function sendReadySongs(limit = 3) {
         sentAt: FieldValue.serverTimestamp(),
         delivery
       });
+
+      // Devuelve el estado al CRM: sin esto el lead se queda en "Creando cancion".
+      await markSongDelivered({ ...song, clipUrls });
     } catch (error) {
       console.error("[music] send error", {
         musicId: doc.id,
