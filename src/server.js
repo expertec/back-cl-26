@@ -48,8 +48,18 @@ app.listen(config.port, () => {
     tmpDir: config.tmpDir,
     sunoBaseUrl: config.sunoBaseUrl,
     hasFirebaseBucket: Boolean(config.firebaseStorageBucket),
-    hasKanwapSession: Boolean(config.kanwapSessionId)
+    hasOpenaiKey: Boolean(config.openaiApiKey),
+    hasSunoKey: Boolean(config.sunoApiKey),
+    whatsappProvider: config.whatsappProvider,
+    baileysSessionsRoot: config.baileysSessionsRoot
   });
+
+  if (config.baileysSessionsRoot.startsWith("/tmp")) {
+    console.warn(
+      "[config] las sesiones de WhatsApp viven en un directorio efimero: cada deploy va a pedir QR nuevo.",
+      { baileysSessionsRoot: config.baileysSessionsRoot, fix: "Monta un disco y define BAILEYS_SESSIONS_ROOT=/var/data/wa-sessions" }
+    );
+  }
   if (config.enableCron) startCron();
   bootstrapWhatsappProvider().catch((error) => {
     console.error("[whatsapp/bootstrap] failed:", error);

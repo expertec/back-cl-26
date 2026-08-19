@@ -2,6 +2,10 @@ import dotenv from "dotenv";
 
 dotenv.config();
 
+// Baileys es el proveedor por defecto: la sesion propia del backend.
+// KanWap y Vev quedan como alternativas explicitas via WHATSAPP_PROVIDER.
+const whatsappProvider = (process.env.WHATSAPP_PROVIDER || "baileys").toLowerCase();
+
 export const config = {
   port: Number(process.env.PORT || 3001),
   frontendOrigin: process.env.FRONTEND_ORIGIN || "http://localhost:3000",
@@ -23,11 +27,11 @@ export const config = {
   clipDurationSeconds: Number(process.env.CLIP_DURATION_SECONDS || 60),
   deliveryApiUrl: process.env.DELIVERY_API_URL || "",
   deliveryApiToken: process.env.DELIVERY_API_TOKEN || "",
-  whatsappProvider: (process.env.WHATSAPP_PROVIDER || "kanwap").toLowerCase(),
+  whatsappProvider,
   baileysSessionId: process.env.BAILEYS_SESSION_ID || process.env.WA_SESSION_ID || "cantalab",
   baileysSessionsRoot:
     process.env.BAILEYS_SESSIONS_ROOT || process.env.WA_SESSIONS_ROOT || `${process.env.TMP_DIR || "/tmp/cantalab"}/wa-sessions`,
-  enableBaileys: process.env.ENABLE_BAILEYS === "true" || (process.env.WHATSAPP_PROVIDER || "").toLowerCase() === "baileys",
+  enableBaileys: process.env.ENABLE_BAILEYS !== "false" && (process.env.ENABLE_BAILEYS === "true" || whatsappProvider === "baileys"),
   vevWhatsappApiUrl: (process.env.VEV_WHATSAPP_API_URL || "https://vev-crm-viy5.onrender.com").replace(/\/$/, ""),
   vevWhatsappToken: process.env.VEV_WHATSAPP_TOKEN || "",
   vevNegocioId: process.env.VEV_NEGOCIO_ID || "",

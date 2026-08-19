@@ -14,7 +14,11 @@ export async function extractFields({ messageText, order, conversation, recentMe
     const result = await createJsonChatCompletion({
       system: [
         "Eres un analista de conversaciones de WhatsApp para canciones personalizadas.",
-        "Devuelve solo JSON valido. No ejecutes acciones. No cambies estados.",
+        "Devuelve solo JSON valido con exactamente estas claves de primer nivel:",
+        '{"intent": "...", "extractedFields": {...}, "confidence": 0.9, "revisionInstruction": ""}.',
+        "extractedFields debe traer los datos reales del mensaje, no los nombres del schema.",
+        "Omite las claves de extractedFields para las que no tengas dato.",
+        "No ejecutes acciones. No cambies estados.",
         "Extrae datos aunque esten implicitos. Si hay artista de referencia, infiere genero cuando sea razonable.",
         "No inventes nombres, relaciones ni historias si no estan en el mensaje o contexto."
       ].join(" "),
@@ -51,33 +55,124 @@ export async function extractFields({ messageText, order, conversation, recentMe
       maxTokens: 450
     });
 
-    return normalizeExtraction(result);
+    const normalized = normalizeExtraction(result, messageText);
+
+    if (!Object.keys(normalized.extractedFields).length) {
+      console.warn("[conversation] extraccion sin campos; revisar respuesta de OpenAI", {
+        intent: normalized.intent,
+        rawKeys: result && typeof result === "object" ? Object.keys(result) : null,
+        raw: JSON.stringify(result).slice(0, 500)
+      });
+    }
+
+    return normalized;
   } catch (error) {
     console.warn("[conversation] OpenAI extraction failed; using fallback", { message: error.message });
-    return fallbackExtraction(messageText);
+    return heuristicExtraction(messageText);
   }
 }
 
-function normalizeExtraction(result) {
+function normalizeExtraction(result, messageText) {
+  const sourceFields = findExtractedFields(result);
   const extractedFields = {};
-  const sourceFields = result?.extractedFields || {};
 
   for (const field of VALID_ORDER_FIELDS) {
     const value = sourceFields[field];
-    if (typeof value === "string" && value.trim()) {
+    if (typeof value === "string" && value.trim() && !isSchemaEcho(value)) {
       extractedFields[field] = value.trim();
     }
   }
 
+  // La heuristica local cubre lo que el modelo deja fuera; nunca pisa lo que ya extrajo.
+  const heuristic = heuristicExtraction(messageText);
+  for (const [field, value] of Object.entries(heuristic.extractedFields)) {
+    if (!extractedFields[field]) extractedFields[field] = value;
+  }
+
+  const intent = normalizeIntent(result?.intent);
+
   return {
     ...EMPTY_RESULT,
-    intent: normalizeIntent(result?.intent),
+    intent: intent === INTENTS.UNKNOWN ? heuristic.intent : intent,
     extractedFields,
     confidence: clampConfidence(result?.confidence),
     suggestedReply: typeof result?.suggestedReply === "string" ? result.suggestedReply.trim() : "",
     revisionInstruction:
       typeof result?.revisionInstruction === "string" ? result.revisionInstruction.trim() : ""
   };
+}
+
+/**
+ * El modelo a veces anida los datos (`data`, `result`, `fields`) o los devuelve
+ * planos en la raiz. Aceptamos cualquiera de esas formas antes de rendirnos.
+ */
+function findExtractedFields(result) {
+  if (!result || typeof result !== "object") return {};
+
+  const candidates = [
+    result.extractedFields,
+    result.extracted_fields,
+    result.fields,
+    result.data?.extractedFields,
+    result.result?.extractedFields,
+    result
+  ];
+
+  for (const candidate of candidates) {
+    if (!candidate || typeof candidate !== "object") continue;
+    const hasRealField = VALID_ORDER_FIELDS.some(
+      (field) => typeof candidate[field] === "string" && candidate[field].trim() && !isSchemaEcho(candidate[field])
+    );
+    if (hasRealField) return candidate;
+  }
+
+  return {};
+}
+
+// Descarta respuestas donde el modelo repite el schema en vez de contestar.
+function isSchemaEcho(value) {
+  const normalized = String(value).trim().toLowerCase();
+  return normalized === "string" || normalized === "number" || normalized.includes("| unknown");
+}
+
+const PURPOSES = [
+  [/cumplea[nñ]os/, "cumpleanos"],
+  [/aniversario|a[nñ]os casados|casados/, "aniversario"],
+  [/boda|casamiento/, "boda"],
+  [/graduaci[oó]n/, "graduacion"],
+  [/d[ií]a de la madre|d[ií]a de las madres/, "dia de la madre"],
+  [/d[ií]a del padre/, "dia del padre"],
+  [/san valent[ií]n|d[ií]a del amor/, "san valentin"],
+  [/bautizo|xv a[nñ]os|quincea[nñ]era/, "celebracion familiar"],
+  [/perd[oó]n|disculpa/, "pedir perdon"],
+  [/propuesta|pedir matrimonio/, "propuesta de matrimonio"]
+];
+
+const GENRES = [
+  [/regional mexicano|banda|corrido|norte[nñ]o|mariachi|ranchera/, "regional mexicano"],
+  [/cumbia/, "cumbia"],
+  [/reggaeton|regueton/, "reggaeton"],
+  [/balada|romantica|rom[aá]ntica/, "balada romantica"],
+  [/salsa/, "salsa"],
+  [/bachata/, "bachata"],
+  [/rock/, "rock"],
+  [/pop/, "pop"],
+  [/rap|hip hop/, "rap"]
+];
+
+function matchPurpose(lower) {
+  return PURPOSES.find(([pattern]) => pattern.test(lower))?.[1] || "";
+}
+
+function matchGenre(lower) {
+  return GENRES.find(([pattern]) => pattern.test(lower))?.[1] || "";
+}
+
+function normalizeAccents(value) {
+  return String(value || "")
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase();
 }
 
 function normalizeIntent(intent) {
@@ -90,7 +185,7 @@ function clampConfidence(value) {
   return Math.max(0, Math.min(1, number));
 }
 
-function fallbackExtraction(text = "") {
+function heuristicExtraction(text = "") {
   const lower = text.toLowerCase();
   const extractedFields = {};
   let intent = INTENTS.PROVIDE_INFORMATION;
@@ -103,15 +198,45 @@ function fallbackExtraction(text = "") {
     intent = INTENTS.BUYING_SIGNAL;
   }
 
+  // Con la letra ya escrita, "mejor una boda" es una correccion, no un dato nuevo
+  // del brief: extraer campos aqui contaminaria el pedido.
+  if (intent !== INTENTS.PROVIDE_INFORMATION) {
+    return {
+      ...EMPTY_RESULT,
+      intent,
+      confidence: 0.45,
+      revisionInstruction: intent === INTENTS.REQUEST_LYRICS_CHANGE ? text.trim() : ""
+    };
+  }
+
   if (/(car[ií]n leon|car[ií]n le[oó]n)/i.test(text)) {
     extractedFields.referenceArtist = "Carin Leon";
     extractedFields.genre = "regional mexicano";
   }
 
-  if (/esposa/i.test(text)) extractedFields.relationship = "esposa";
-  if (/esposo/i.test(text)) extractedFields.relationship = "esposo";
-  if (/aniversario|años casados|casados/i.test(text)) extractedFields.purpose = "aniversario";
-  if (/cumplea[nñ]os/i.test(text)) extractedFields.purpose = "cumpleanos";
+  const purpose = matchPurpose(lower);
+  if (purpose) extractedFields.purpose = purpose;
+
+  // "para mi esposa Ana" -> relationship + recipient de un solo golpe.
+  const relationMatch = text.match(
+    /\b(?:para|de)\s+(?:mi|mí)\s+(esposa|esposo|novia|novio|mama|mamá|papa|papá|hija|hijo|hermana|hermano|amiga|amigo|abuela|abuelo|pareja)\b(?:\s+(?:que\s+se\s+llama\s+)?([A-ZÁÉÍÓÚÑ][a-záéíóúñ]{2,}))?/i
+  );
+  if (relationMatch) {
+    extractedFields.relationship = normalizeAccents(relationMatch[1]);
+    if (relationMatch[2]) extractedFields.recipient = relationMatch[2];
+  }
+
+  const nameMatch = text.match(/\b(?:soy|me llamo|mi nombre es)\s+([A-ZÁÉÍÓÚÑ][a-záéíóúñ]{2,})/);
+  if (nameMatch) extractedFields.clientName = nameMatch[1];
+
+  const nicknameMatch = text.match(/\ble digo\s+"?([A-ZÁÉÍÓÚÑ][a-záéíóúñ]{2,})"?/i);
+  if (nicknameMatch) extractedFields.nickname = nicknameMatch[1];
+
+  if (/voz\s+(masculina|de hombre)/i.test(text)) extractedFields.voiceType = "masculina";
+  if (/voz\s+(femenina|de mujer)/i.test(text)) extractedFields.voiceType = "femenina";
+
+  const genre = matchGenre(lower);
+  if (genre) extractedFields.genre = genre;
 
   return {
     ...EMPTY_RESULT,
