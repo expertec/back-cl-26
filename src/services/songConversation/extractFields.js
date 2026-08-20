@@ -21,12 +21,13 @@ export async function extractFields({ messageText, order, conversation, recentMe
         "No ejecutes acciones. No cambies estados.",
         "Extrae datos aunque esten implicitos. Si hay artista de referencia, infiere genero cuando sea razonable.",
         "No inventes nombres, relaciones ni historias si no estan en el mensaje o contexto.",
-        "Usa postpone cuando el cliente pide dejarlo para despues, no cuando pide un cambio."
+        "Usa postpone cuando el cliente pide dejarlo para despues, no cuando pide un cambio.",
+        "Usa new_song cuando ya recibio su cancion y quiere encargar otra distinta."
       ].join(" "),
       user: {
         schema: {
           intent:
-            "provide_information | approve_lyrics | request_lyrics_change | question | buying_signal | postpone | unknown",
+            "provide_information | approve_lyrics | request_lyrics_change | question | buying_signal | postpone | new_song | unknown",
           extractedFields: {
             purpose: "string",
             recipient: "string",
@@ -241,6 +242,10 @@ function isShortApproval(text = "") {
   return words.every((word) => APPROVAL_WORDS.has(word));
 }
 
+// Quien ya tiene su cancion y pide "otra": es una venta nueva, no un cambio.
+const NEW_SONG_REGEX =
+  /\b(otra cancion|otra canción|una segunda cancion|segunda cancion|dos canciones|otra mas|otra más|quiero otra|hacer otra|una nueva cancion|nueva canción|ahora (una|otra) para)\b/i;
+
 const POSTPONE_REGEX = new RegExp(
   [
     "\\bma[nñ]ana\\b",
@@ -304,6 +309,10 @@ function heuristicExtraction(text = "", stage = "") {
   const lower = text.toLowerCase();
   const extractedFields = {};
   let intent = INTENTS.PROVIDE_INFORMATION;
+
+  if (NEW_SONG_REGEX.test(text)) {
+    return { ...EMPTY_RESULT, intent: INTENTS.NEW_SONG, confidence: 0.6 };
+  }
 
   // "Mañana continuamos" no es una correccion de la letra: tomarlo como tal
   // hacia que el bot reescribiera la cancion entera con esa frase de guia.

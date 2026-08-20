@@ -53,6 +53,7 @@ export const INTENTS = {
   QUESTION: "question",
   BUYING_SIGNAL: "buying_signal",
   POSTPONE: "postpone",
+  NEW_SONG: "new_song",
   UNKNOWN: "unknown"
 };
 

@@ -190,6 +190,10 @@ async function handleAiConversation({ context, incoming }) {
     return handleLyricsApprovalIntent({ context, incoming, extraction });
   }
 
+  if (extraction.intent === INTENTS.NEW_SONG && yaTieneCancion(context)) {
+    return handleNewSongRequest({ context, incoming });
+  }
+
   if (extraction.intent === INTENTS.POSTPONE) {
     return handlePostpone({ context, incoming });
   }
@@ -226,6 +230,32 @@ async function handleAiConversation({ context, incoming }) {
  * se acusa recibo y se anota para no perderlo. Se queda en la misma etapa, asi
  * que retoma justo donde iba cuando vuelva a escribir.
  */
+function yaTieneCancion(context) {
+  return Boolean(context.order.clipUrls?.length) || context.conversation.stage === CONVERSATION_STAGES.SAMPLES_SENT;
+}
+
+/**
+ * Ya escucho su cancion y quiere otra. Se le abre un pedido nuevo sin volver a
+ * preguntar lo que ya sabemos de el.
+ */
+async function handleNewSongRequest({ context, incoming }) {
+  const { startNewSongOrder } = await import("../adminActions.js");
+
+  try {
+    await startNewSongOrder(context.leadRef.id, { seedText: incoming.text });
+    return buildResult(context, "", CONVERSATION_STAGES.WAITING_DISCOVERY_REPLY, { nuevoPedido: true });
+  } catch (error) {
+    console.error("[conversation] no se pudo abrir el pedido nuevo", {
+      leadId: context.leadRef.id,
+      error: error.message
+    });
+
+    const reply = "Claro que si, con gusto te hago otra. ¿Para quien seria y que ocasion celebramos?";
+    await sendAndSaveReply({ context, incoming, reply, suffix: "nueva-cancion" });
+    return buildResult(context, reply, context.conversation.stage);
+  }
+}
+
 async function handlePostpone({ context, incoming }) {
   const reply = "Claro, cuando gustes seguimos. Aqui te espero y tu cancion queda guardada.";
 

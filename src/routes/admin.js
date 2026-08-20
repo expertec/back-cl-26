@@ -30,6 +30,7 @@ import {
   forceProduce,
   reactivateBot,
   releaseConversationLocks,
+  startNewSongOrder,
   sendManualMessage
 } from "../services/adminActions.js";
 import { runMusicPipeline } from "../jobs/musicPipeline.js";
@@ -246,7 +247,8 @@ const CONVERSATION_ACTIONS = {
   aprobar_y_producir: forceApproveAndProduce,
   producir: forceProduce,
   liberar_locks: releaseConversationLocks,
-  reactivar_bot: reactivateBot
+  reactivar_bot: reactivateBot,
+  nueva_cancion: startNewSongOrder
 };
 
 adminRouter.post("/conversations/:leadId/:action", async (req, res) => {

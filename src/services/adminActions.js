@@ -300,3 +300,92 @@ export async function reactivateBot(leadId) {
 
   return { stage, faltantes };
 }
+
+/**
+ * Segunda cancion en adelante. Un lead tenia un solo pedido de por vida, asi que
+ * quien ya habia comprado y queria otra no tenia donde aterrizar: su historia
+ * nueva caia sobre un pedido cerrado.
+ *
+ * Se mantiene la misma conversacion, porque en WhatsApp es el mismo hilo, y se
+ * le cuelga un pedido nuevo. Lo que ya sabemos del cliente (su nombre, el genero
+ * y la voz que eligio) se hereda: solo hay que preguntar para quien es y por que.
+ */
+export async function startNewSongOrder(leadId, { seedText = "" } = {}) {
+  const context = await loadContext(leadId);
+  const { order, lead, conversationRef } = context;
+
+  if (!order.lyrics) throw new Error("Su pedido actual todavia no tiene letra; no hay nada que cerrar.");
+
+  const previous = context.conversation.orderHistory || [];
+  const nuevoRef = db.collection(COLLECTIONS.songOrders).doc();
+
+  await nuevoRef.set({
+    leadId,
+    phone: lead.phone || "",
+    // Se heredan las preferencias, no el pedido: la cancion es para otra persona.
+    clientName: order.clientName || lead.name || "",
+    genre: order.genre || "",
+    referenceArtist: order.referenceArtist || "",
+    voiceType: order.voiceType || "",
+    purpose: "",
+    recipient: "",
+    relationship: "",
+    nickname: "",
+    story: "",
+    specialDetails: "",
+    lyrics: "",
+    lyricsApproved: false,
+    lyricsVersion: 0,
+    lyricsRevisionCount: 0,
+    fullUrls: [],
+    clipUrls: [],
+    musicStatus: "brief_open",
+    orderNumber: previous.length + 2,
+    previousOrderId: conversationRef.id ? context.conversation.songOrderId : null,
+    createdAt: FieldValue.serverTimestamp(),
+    updatedAt: FieldValue.serverTimestamp()
+  });
+
+  await conversationRef.update({
+    songOrderId: nuevoRef.id,
+    orderHistory: FieldValue.arrayUnion(context.conversation.songOrderId),
+    postponedAt: FieldValue.delete(),
+    followUpSentAt: FieldValue.delete(),
+    secondFollowUpSentAt: FieldValue.delete(),
+    mode: "ai",
+    updatedAt: FieldValue.serverTimestamp()
+  });
+
+  await context.leadRef.update({
+    mode: "ai",
+    // Ya es cliente, no un lead nuevo: el kanban no debe tratarlo como frio.
+    esCliente: true,
+    cancionesCompradas: FieldValue.increment(0),
+    updatedAt: FieldValue.serverTimestamp()
+  });
+
+  await setConversationStage({
+    conversationRef,
+    leadRef: context.leadRef,
+    stage: CONVERSATION_STAGES.WAITING_DISCOVERY_REPLY
+  });
+
+  const nombre = String(order.clientName || lead.name || "").trim().split(/\s+/)[0];
+  const reply = [
+    nombre ? `Con gusto, ${nombre}.` : "Con gusto.",
+    "",
+    "Vamos con tu siguiente cancion. ¿Para quien es y que ocasion celebramos?"
+  ].join("\n");
+
+  await notify(context, reply);
+
+  logEvent({
+    level: "warn",
+    scope: "venta",
+    message: `Nuevo pedido abierto (#${previous.length + 2})`,
+    leadId,
+    phone: lead.phone
+  });
+
+  return { songOrderId: nuevoRef.id, orderNumber: previous.length + 2, seedText: Boolean(seedText) };
+}
