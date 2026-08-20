@@ -1,4 +1,4 @@
-import { db } from "../firebase.js";
+import { db, FieldValue } from "../firebase.js";
 import { COLLECTIONS, CONVERSATION_STAGES } from "./songConversation/constants.js";
 import { getMissingFields } from "./songConversation/getMissingFields.js";
 
@@ -264,4 +264,76 @@ function fmt(minutes) {
 
 function toMillis(value) {
   return value?.toDate?.()?.getTime?.() || 0;
+}
+
+/**
+ * Historial de una conversacion para verla desde el panel. Se devuelve en orden
+ * cronologico, que es como se lee un chat, aunque en Firestore convenga pedir
+ * los ultimos en orden inverso.
+ */
+export async function getConversationMessages(leadId, { limit = 80 } = {}) {
+  const conversationSnap = await db
+    .collection(COLLECTIONS.conversations)
+    .where("leadId", "==", leadId)
+    .where("active", "==", true)
+    .limit(1)
+    .get();
+
+  if (conversationSnap.empty) throw new Error("Este lead no tiene una conversacion activa.");
+
+  const conversationDoc = conversationSnap.docs[0];
+  const conversation = conversationDoc.data();
+
+  const [leadSnap, messagesSnap] = await Promise.all([
+    db.collection(COLLECTIONS.leads).doc(leadId).get(),
+    conversationDoc.ref.collection("messages").orderBy("createdAt", "desc").limit(Math.min(limit, 200)).get()
+  ]);
+
+  const lead = leadSnap.exists ? leadSnap.data() : {};
+
+  const messages = messagesSnap.docs
+    .map((doc) => {
+      const data = doc.data();
+      return {
+        id: doc.id,
+        direction: data.direction,
+        text: data.text || "",
+        manual: Boolean(data.manual),
+        followUp: data.followUp || null,
+        createdAt: data.createdAt?.toDate?.()?.getTime?.() || null
+      };
+    })
+    .reverse();
+
+  return {
+    messages,
+    lead: {
+      id: leadId,
+      name: lead.name || "",
+      phone: lead.phone || "",
+      mode: conversation.mode || lead.mode || "ai",
+      stage: conversation.stage || "",
+      kanbanStage: lead.kanbanStage || ""
+    }
+  };
+}
+
+export async function setConversationMode(leadId, mode) {
+  if (!["ai", "human"].includes(mode)) throw new Error("Modo invalido.");
+
+  const conversationSnap = await db
+    .collection(COLLECTIONS.conversations)
+    .where("leadId", "==", leadId)
+    .where("active", "==", true)
+    .limit(1)
+    .get();
+
+  await Promise.all([
+    db.collection(COLLECTIONS.leads).doc(leadId).update({ mode, updatedAt: FieldValue.serverTimestamp() }),
+    conversationSnap.empty
+      ? Promise.resolve()
+      : conversationSnap.docs[0].ref.update({ mode, updatedAt: FieldValue.serverTimestamp() })
+  ]);
+
+  return { mode };
 }

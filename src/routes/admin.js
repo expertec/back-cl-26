@@ -18,7 +18,11 @@ import { listEvents } from "../services/eventLog.js";
 import { deliverFullSong } from "../services/fullDelivery.js";
 import { getBotSettings, updateBotSettings } from "../services/botSettings.js";
 import { sendPendingFollowUps } from "../jobs/followUp.js";
-import { getConversationsHealth } from "../services/conversationMonitor.js";
+import {
+  getConversationMessages,
+  getConversationsHealth,
+  setConversationMode
+} from "../services/conversationMonitor.js";
 import {
   forceApproveAndProduce,
   forceGenerateLyrics,
@@ -301,5 +305,23 @@ adminRouter.post("/songs/:musicId/deliver-full", requireRole("admin"), async (re
     return res.json({ ok: true, ...result });
   } catch (error) {
     return res.status(400).json({ ok: false, error: error.message || "No se pudo entregar la cancion." });
+  }
+});
+
+adminRouter.get("/conversations/:leadId/messages", async (req, res) => {
+  try {
+    const data = await getConversationMessages(req.params.leadId, { limit: Number(req.query.limit || 80) });
+    res.set("Cache-Control", "no-store");
+    return res.json({ ok: true, ...data });
+  } catch (error) {
+    return res.status(404).json({ ok: false, error: error.message });
+  }
+});
+
+adminRouter.post("/conversations/:leadId/mode", async (req, res) => {
+  try {
+    return res.json({ ok: true, ...(await setConversationMode(req.params.leadId, req.body?.mode)) });
+  } catch (error) {
+    return res.status(400).json({ ok: false, error: error.message });
   }
 });
