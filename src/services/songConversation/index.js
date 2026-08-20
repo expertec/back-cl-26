@@ -18,6 +18,7 @@ import { buildSongForLyrics } from "./songBrief.js";
 // llamada a OpenAI), el pedido quedaba bloqueado para siempre: el cliente pedia
 // otro cambio y el bot no respondia nada nunca mas.
 const LOCK_MAX_AGE_MS = 5 * 60 * 1000;
+const REPEAT_WINDOW_MS = 30 * 60 * 1000;
 
 const POST_APPROVAL_STAGES = new Set([
   CONVERSATION_STAGES.LYRICS_APPROVED,
@@ -167,19 +168,30 @@ async function handleAiConversation({ context, incoming }) {
     lastIntent: extraction.intent
   };
 
+  // Si hay letra sin aprobar, la conversacion esta en revision aunque el stage
+  // diga otra cosa. Sin esto, un stage que quedo en BRIEF_COMPLETE hacia que
+  // cada mensaje del cliente recibiera la misma respuesta para siempre, y sus
+  // peticiones de cambio no se atendian nunca.
+  if (context.order.lyrics && !context.order.lyricsApproved && !isLyricsStage(context.conversation.stage)) {
+    console.warn("[conversation] stage inconsistente, se corrige a revision de letra", {
+      conversationId: context.conversationRef.id,
+      stageAnterior: context.conversation.stage
+    });
+
+    await setConversationStage({
+      conversationRef: context.conversationRef,
+      leadRef: context.leadRef,
+      stage: CONVERSATION_STAGES.WAITING_LYRICS_APPROVAL
+    });
+    context.conversation = { ...context.conversation, stage: CONVERSATION_STAGES.WAITING_LYRICS_APPROVAL };
+  }
+
   if (context.conversation.stage === CONVERSATION_STAGES.WAITING_LYRICS_APPROVAL) {
     return handleLyricsApprovalIntent({ context, incoming, extraction });
   }
 
   if (extraction.intent === INTENTS.BUYING_SIGNAL) {
-    await setConversationStage({
-      conversationRef: context.conversationRef,
-      leadRef: context.leadRef,
-      stage: CONVERSATION_STAGES.READY_FOR_SALES
-    });
-    const reply = "Te paso con el equipo para ayudarte con la version completa.";
-    await sendAndSaveReply({ context, incoming, reply, suffix: "sales-ready" });
-    return buildResult(context, reply, CONVERSATION_STAGES.READY_FOR_SALES);
+    return handOverToSales({ context, incoming });
   }
 
   if (POST_APPROVAL_STAGES.has(context.conversation.stage)) {
@@ -199,6 +211,38 @@ async function handleAiConversation({ context, incoming }) {
  * flujo caia en completeBriefAndGenerateLyrics, el lock devolvia "lyrics-exist"
  * y el bot se quedaba mudo ademas de regresar el lead a "Revisando letra".
  */
+/**
+ * Al pasar a ventas el bot se calla y la conversacion queda en modo humano: si
+ * sigue contestando, el cliente recibe "te paso con el equipo" en bucle cada vez
+ * que escribe, que es justo cuando mas atencion necesita.
+ */
+async function handOverToSales({ context, incoming }) {
+  await setConversationStage({
+    conversationRef: context.conversationRef,
+    leadRef: context.leadRef,
+    stage: CONVERSATION_STAGES.READY_FOR_SALES
+  });
+
+  await Promise.all([
+    context.leadRef.update({ mode: "human", updatedAt: FieldValue.serverTimestamp() }),
+    context.conversationRef.update({ mode: "human", updatedAt: FieldValue.serverTimestamp() })
+  ]);
+
+  const reply = "Con gusto. Te paso con una persona del equipo para darte precios y la version completa.";
+  await sendAndSaveReply({ context, incoming, reply, suffix: "sales-ready" });
+
+  logEvent({
+    level: "warn",
+    scope: "ventas",
+    message: "Lead con intencion de compra esperando atencion",
+    leadId: context.leadRef.id,
+    phone: context.lead.phone,
+    detail: incoming.text
+  });
+
+  return buildResult(context, reply, CONVERSATION_STAGES.READY_FOR_SALES);
+}
+
 async function handlePostApprovalMessage({ context, incoming }) {
   const stage = context.conversation.stage;
   const reply =
@@ -338,14 +382,7 @@ async function handleLyricsApprovalIntent({ context, incoming, extraction }) {
   }
 
   if (extraction.intent === INTENTS.BUYING_SIGNAL) {
-    await setConversationStage({
-      conversationRef: context.conversationRef,
-      leadRef: context.leadRef,
-      stage: CONVERSATION_STAGES.READY_FOR_SALES
-    });
-    const reply = "Te paso con el equipo para ayudarte con la version completa.";
-    await sendAndSaveReply({ context, incoming, reply, suffix: "sales-ready" });
-    return buildResult(context, reply, CONVERSATION_STAGES.READY_FOR_SALES);
+    return handOverToSales({ context, incoming });
   }
 
   // Con la letra en pantalla, casi todo lo que escribe el cliente es feedback
@@ -362,6 +399,14 @@ async function handleLyricsApprovalIntent({ context, incoming, extraction }) {
   const reply = "¿La letra te gusta asi o quieres que cambie alguna parte?";
   await sendAndSaveReply({ context, incoming, reply, suffix: "lyrics-followup" });
   return buildResult(context, reply, CONVERSATION_STAGES.WAITING_LYRICS_APPROVAL);
+}
+
+function isLyricsStage(stage) {
+  return [
+    CONVERSATION_STAGES.WAITING_LYRICS_APPROVAL,
+    CONVERSATION_STAGES.LYRICS_REVISION,
+    CONVERSATION_STAGES.GENERATING_LYRICS
+  ].includes(stage);
 }
 
 function getRevisionsUsed(order = {}) {
@@ -686,6 +731,17 @@ function toPlainJson(value, maxChars = 20000) {
 
 async function sendAndSaveReply({ context, incoming, reply, suffix }) {
   if (!reply) return null;
+
+  // Repetir palabra por palabra lo ultimo que dijimos hace que el bot parezca
+  // roto y no aporta nada: si el cliente insiste, el problema es otro.
+  const lastReplyAt = context.conversation.lastBotReplyAt?.toDate?.()?.getTime?.() || 0;
+  if (reply === context.conversation.lastBotReply && Date.now() - lastReplyAt < REPEAT_WINDOW_MS) {
+    console.warn("[conversation] respuesta repetida omitida", {
+      conversationId: context.conversationRef.id,
+      suffix
+    });
+    return null;
+  }
 
   const delivery = await sendText({
     phone: context.lead.waJid || context.lead.phone,
