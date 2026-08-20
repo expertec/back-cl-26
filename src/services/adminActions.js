@@ -6,6 +6,8 @@ import { COLLECTIONS, CONVERSATION_STAGES } from "./songConversation/constants.j
 import { setConversationStage } from "./songConversation/conversationState.js";
 import { buildSongForLyrics } from "./songConversation/songBrief.js";
 import { getMissingFields } from "./songConversation/getMissingFields.js";
+import { extractFields } from "./songConversation/extractFields.js";
+import { generateNextQuestion } from "./songConversation/generateNextQuestion.js";
 import { sendText } from "./whatsapp/index.js";
 
 /**
@@ -370,11 +372,65 @@ export async function startNewSongOrder(leadId, { seedText = "" } = {}) {
     stage: CONVERSATION_STAGES.WAITING_DISCOVERY_REPLY
   });
 
-  const nombre = String(order.clientName || lead.name || "").trim().split(/\s+/)[0];
+  // El cliente suele mandar la historia de la nueva cancion antes de que nadie
+  // abra el pedido. Arrancar de cero le obligaria a escribirla otra vez.
+  const semilla = seedText || (await getRecentInboundText(conversationRef));
+  const heredado = {
+    clientName: order.clientName || lead.name || "",
+    genre: order.genre || "",
+    referenceArtist: order.referenceArtist || "",
+    voiceType: order.voiceType || ""
+  };
+
+  let nuevoPedido = { ...heredado };
+
+  if (semilla) {
+    try {
+      const extraccion = await extractFields({
+        messageText: semilla,
+        order: nuevoPedido,
+        conversation: { stage: CONVERSATION_STAGES.DISCOVERY },
+        recentMessages: []
+      });
+
+      const campos = {};
+      for (const [campo, valor] of Object.entries(extraccion.extractedFields || {})) {
+        if (valor && !nuevoPedido[campo]) campos[campo] = valor;
+      }
+
+      // Si el modelo no reconocio la historia pero el cliente escribio un texto
+      // largo, ese texto es la historia: perderla obligaria a repetirla entera.
+      if (!campos.story && !nuevoPedido.story && semilla.length > 120) {
+        campos.story = semilla.slice(0, 1500);
+      }
+
+      if (Object.keys(campos).length) {
+        await nuevoRef.update({ ...campos, seededFrom: "conversacion", updatedAt: FieldValue.serverTimestamp() });
+        nuevoPedido = { ...nuevoPedido, ...campos };
+      }
+    } catch (error) {
+      console.warn("[venta] no se pudo aprovechar el contexto previo", { leadId, error: error.message });
+    }
+  }
+
+  const faltantes = getMissingFields(nuevoPedido);
+  const nombre = String(heredado.clientName).trim().split(/\s+/)[0];
+  const aprovecho = Object.keys(nuevoPedido).some((campo) => !heredado[campo] && nuevoPedido[campo]);
+
+  const pregunta = faltantes.length
+    ? await generateNextQuestion({
+        missingFields: faltantes,
+        order: nuevoPedido,
+        conversation: { summary: "", lastAskedFields: [] }
+      })
+    : "¿Le damos para adelante con estos datos?";
+
   const reply = [
     nombre ? `Con gusto, ${nombre}.` : "Con gusto.",
     "",
-    "Vamos con tu siguiente cancion. ¿Para quien es y que ocasion celebramos?"
+    aprovecho ? "Ya tome nota de lo que me contaste para esta nueva cancion." : "Vamos con tu siguiente cancion.",
+    "",
+    pregunta
   ].join("\n");
 
   await notify(context, reply);
@@ -388,4 +444,24 @@ export async function startNewSongOrder(leadId, { seedText = "" } = {}) {
   });
 
   return { songOrderId: nuevoRef.id, orderNumber: previous.length + 2, seedText: Boolean(seedText) };
+}
+
+/**
+ * Junta lo que el cliente escribio recientemente, que es de donde sale el
+ * contexto de la cancion nueva cuando la pidio antes de que nadie abriera el
+ * pedido.
+ */
+async function getRecentInboundText(conversationRef, { horas = 48, maximo = 6 } = {}) {
+  const snap = await conversationRef.collection("messages").orderBy("createdAt", "desc").limit(25).get();
+  const desde = Date.now() - horas * 60 * 60 * 1000;
+
+  const textos = snap.docs
+    .map((doc) => doc.data())
+    .filter((data) => data.direction === "in" && (data.createdAt?.toDate?.()?.getTime?.() || 0) >= desde)
+    .map((data) => String(data.text || "").trim())
+    .filter(Boolean)
+    .slice(0, maximo)
+    .reverse();
+
+  return textos.join("\n");
 }
