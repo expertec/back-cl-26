@@ -5,6 +5,9 @@ import { getMissingFields } from "./songConversation/getMissingFields.js";
 const MUSIC_ERROR_STATUSES = ["Error letra", "Error prompt", "Error musica", "Error música", "Error clip", "Error envio", "Error sin fullUrl"];
 const MUSIC_DONE_STATUSES = ["Enviada", "Enviada completa"];
 
+// Alguien que dice que ya pago no puede quedar mezclado con el resto de la cola.
+const PAGO_REGEX = /\b(transferenc|deposit|ya pagu|ya te pagu|hice el pago|pague|comprobante|ya mande el dinero|spei)/i;
+
 // Minutos a partir de los cuales cada situacion deja de ser normal.
 const UMBRALES = {
   sinResponder: 10,
@@ -124,8 +127,12 @@ function diagnose({ conversation, lead, order, music, missingFields, unanswered,
   const stage = conversation.stage || "";
   const mode = conversation.mode || lead.mode || "ai";
 
+  if (PAGO_REGEX.test(lead.lastMessage || "")) {
+    return d("posible_pago", 5, "Dice que ya pago: atender de inmediato", ["responder"]);
+  }
+
   if (mode === "human" || stage === CONVERSATION_STAGES.HUMAN_TAKEOVER) {
-    return d("esperando_humano", 3, "Pasada a un asesor y sin atender", ["responder"]);
+    return d("esperando_humano", 3, "Pasada a un asesor y sin atender", ["responder", "reactivar_bot"]);
   }
 
   if (unanswered && minutesSinceMessage >= UMBRALES.sinResponder) {
@@ -174,7 +181,15 @@ function diagnose({ conversation, lead, order, music, missingFields, unanswered,
   }
 
   if (stage === CONVERSATION_STAGES.READY_FOR_SALES) {
-    return d("listo_para_venta", 3, "Mostro intencion de compra", ["responder"]);
+    // Si nunca llego a tener muestra, lo mandamos a ventas por error: lo suyo
+    // es devolverlo al bot para que termine el brief y reciba su cancion.
+    const sinMuestra = !order.clipUrls?.length && !order.lyrics;
+    return d(
+      "listo_para_venta",
+      3,
+      sinMuestra ? "Paso a ventas sin haber recibido su muestra" : "Mostro intencion de compra",
+      sinMuestra ? ["reactivar_bot", "responder"] : ["responder"]
+    );
   }
 
   if (minutesSinceMessage >= 60 * 24) {

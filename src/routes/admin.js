@@ -22,6 +22,7 @@ import {
   forceApproveAndProduce,
   forceGenerateLyrics,
   forceProduce,
+  reactivateBot,
   releaseConversationLocks,
   sendManualMessage
 } from "../services/adminActions.js";
@@ -238,7 +239,8 @@ const CONVERSATION_ACTIONS = {
   generar_letra: forceGenerateLyrics,
   aprobar_y_producir: forceApproveAndProduce,
   producir: forceProduce,
-  liberar_locks: releaseConversationLocks
+  liberar_locks: releaseConversationLocks,
+  reactivar_bot: reactivateBot
 };
 
 adminRouter.post("/conversations/:leadId/:action", async (req, res) => {

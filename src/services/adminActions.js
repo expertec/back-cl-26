@@ -5,6 +5,7 @@ import { startSongProduction } from "./songProduction.js";
 import { COLLECTIONS, CONVERSATION_STAGES } from "./songConversation/constants.js";
 import { setConversationStage } from "./songConversation/conversationState.js";
 import { buildSongForLyrics } from "./songConversation/songBrief.js";
+import { getMissingFields } from "./songConversation/getMissingFields.js";
 import { sendText } from "./whatsapp/index.js";
 
 /**
@@ -199,4 +200,77 @@ async function notify(context, message) {
   });
 
   return delivery;
+}
+
+/**
+ * Devuelve al bot una conversacion que se paso al equipo. Sirve sobre todo para
+ * las que quedaron atrapadas por errores ya corregidos: preguntar el precio o
+ * pedir un segundo cambio de letra las mandaba con un asesor y ahi se quedaban.
+ * El stage se recalcula desde lo que realmente hay, no desde donde quedo.
+ */
+export async function reactivateBot(leadId) {
+  const context = await loadContext(leadId);
+  const { order, orderRef, lead } = context;
+
+  const tieneMuestras = Boolean(order.clipUrls?.length);
+  const faltantes = getMissingFields(order);
+
+  let stage;
+  let reply;
+
+  if (tieneMuestras) {
+    stage = CONVERSATION_STAGES.SAMPLES_SENT;
+    reply = "Perdona la demora. Aqui sigo por si quieres la version completa de tu cancion.";
+  } else if (order.lyrics && !order.lyricsApproved) {
+    stage = CONVERSATION_STAGES.WAITING_LYRICS_APPROVAL;
+    reply = [
+      "Perdona la demora, retomo tu cancion.",
+      "",
+      "¿Quieres que ajuste algo mas de la letra, o la produzco asi y te la mando cantada?"
+    ].join("\n");
+  } else if (order.lyricsApproved) {
+    stage = CONVERSATION_STAGES.PRODUCING_SONG;
+    reply = "Perdona la demora. Retomo tu cancion y te la mando en cuanto este.";
+  } else {
+    stage = CONVERSATION_STAGES.WAITING_DISCOVERY_REPLY;
+    reply = [
+      "Perdona la demora. Te hago tu muestra sin costo, solo me faltan unos datos.",
+      "",
+      faltantes.includes("recipient") ? "¿Para quien es la cancion?" : "¿Seguimos con tu cancion?"
+    ].join("\n");
+  }
+
+  await Promise.all([
+    context.leadRef.update({
+      mode: "ai",
+      reactivatedAt: FieldValue.serverTimestamp(),
+      updatedAt: FieldValue.serverTimestamp()
+    }),
+    context.conversationRef.update({ mode: "ai", updatedAt: FieldValue.serverTimestamp() }),
+    // Sin limpiar esto, el primer cambio que pida vuelve a toparse con el tope.
+    orderRef.update({
+      revisionLimitNotifiedAt: FieldValue.delete(),
+      lyricsRevisionLock: FieldValue.delete(),
+      lyricsGenerationLock: FieldValue.delete(),
+      updatedAt: FieldValue.serverTimestamp()
+    })
+  ]);
+
+  await setConversationStage({
+    conversationRef: context.conversationRef,
+    leadRef: context.leadRef,
+    stage
+  });
+
+  await notify(context, reply);
+
+  logEvent({
+    level: "warn",
+    scope: "admin",
+    message: `Conversacion devuelta al bot en ${stage}`,
+    leadId,
+    phone: lead.phone
+  });
+
+  return { stage, faltantes };
 }
