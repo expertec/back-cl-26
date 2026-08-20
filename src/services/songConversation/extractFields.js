@@ -20,12 +20,13 @@ export async function extractFields({ messageText, order, conversation, recentMe
         "Omite las claves de extractedFields para las que no tengas dato.",
         "No ejecutes acciones. No cambies estados.",
         "Extrae datos aunque esten implicitos. Si hay artista de referencia, infiere genero cuando sea razonable.",
-        "No inventes nombres, relaciones ni historias si no estan en el mensaje o contexto."
+        "No inventes nombres, relaciones ni historias si no estan en el mensaje o contexto.",
+        "Usa postpone cuando el cliente pide dejarlo para despues, no cuando pide un cambio."
       ].join(" "),
       user: {
         schema: {
           intent:
-            "provide_information | approve_lyrics | request_lyrics_change | question | buying_signal | unknown",
+            "provide_information | approve_lyrics | request_lyrics_change | question | buying_signal | postpone | unknown",
           extractedFields: {
             purpose: "string",
             recipient: "string",
@@ -240,6 +241,40 @@ function isShortApproval(text = "") {
   return words.every((word) => APPROVAL_WORDS.has(word));
 }
 
+const POSTPONE_REGEX = new RegExp(
+  [
+    "\\bma[nñ]ana\\b",
+    "\\b(mas|más) (tarde|al rato|noche)\\b",
+    "\\bal rato\\b",
+    "\\bluego (te|le|seguimos|continuamos|checo|vemos|escribo)\\b",
+    "\\bdespu[eé]s (seguimos|continuamos|te escribo|lo vemos)\\b",
+    "\\b(ahorita|ahora) no\\b",
+    "\\bestoy (ocupad|trabajando|manejando|en el trabajo)",
+    "\\bno puedo (ahorita|ahora|en este momento)\\b",
+    "\\bcontinuamos (ma[nñ]ana|luego|despu[eé]s)\\b",
+    "\\bel (fin de semana|lunes|martes|miercoles|mi[eé]rcoles|jueves|viernes|sabado|s[aá]bado|domingo)\\b",
+    "\\bmas tarde\\b",
+    "\\bte (escribo|aviso|marco) (luego|despu[eé]s|ma[nñ]ana|al rato)\\b",
+    "\\bdame (tiempo|chance|unos dias|unos d[ií]as)\\b"
+  ].join("|"),
+  "i"
+);
+
+function isPostpone(text = "") {
+  const raw = String(text).trim();
+  if (raw.length > 120) return false;
+
+  const normalized = raw.normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+  if (!POSTPONE_REGEX.test(normalized) && !POSTPONE_REGEX.test(raw)) return false;
+
+  // "que hable de nuestra boda manana" habla del contenido de la letra, no de
+  // dejar la conversacion para despues.
+  const HABLA_DE_LA_LETRA =
+    /\b(cambia|corrige|modifica|quita|agrega|ponle|pon|incluye|menciona|donde dice|que (diga|hable|mencione|incluya)|quiero que|puedes (poner|decir))\b/i;
+
+  return !HABLA_DE_LA_LETRA.test(normalized);
+}
+
 function matchPurpose(lower) {
   return PURPOSES.find(([pattern]) => pattern.test(lower))?.[1] || "";
 }
@@ -269,6 +304,12 @@ function heuristicExtraction(text = "", stage = "") {
   const lower = text.toLowerCase();
   const extractedFields = {};
   let intent = INTENTS.PROVIDE_INFORMATION;
+
+  // "Mañana continuamos" no es una correccion de la letra: tomarlo como tal
+  // hacia que el bot reescribiera la cancion entera con esa frase de guia.
+  if (isPostpone(text)) {
+    return { ...EMPTY_RESULT, intent: INTENTS.POSTPONE, confidence: 0.6 };
+  }
 
   // Esperando el visto bueno, la mayoria responde corto: "ok", "me gusta", "👍".
   if (stage === CONVERSATION_STAGES.WAITING_LYRICS_APPROVAL && isShortApproval(text)) {

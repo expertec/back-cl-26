@@ -190,6 +190,10 @@ async function handleAiConversation({ context, incoming }) {
     return handleLyricsApprovalIntent({ context, incoming, extraction });
   }
 
+  if (extraction.intent === INTENTS.POSTPONE) {
+    return handlePostpone({ context, incoming });
+  }
+
   if (extraction.intent === INTENTS.BUYING_SIGNAL) {
     return handleBuyingSignal({ context, incoming });
   }
@@ -217,6 +221,24 @@ async function handleAiConversation({ context, incoming }) {
  * explica que la muestra es gratis y se sigue con el brief, que es lo que lleva
  * a la venta. Mandarlo al equipo con el pedido vacio lo dejaba muerto ahi.
  */
+/**
+ * El cliente pide dejarlo para despues. No se toca el pedido ni la letra: solo
+ * se acusa recibo y se anota para no perderlo. Se queda en la misma etapa, asi
+ * que retoma justo donde iba cuando vuelva a escribir.
+ */
+async function handlePostpone({ context, incoming }) {
+  const reply = "Claro, cuando gustes seguimos. Aqui te espero y tu cancion queda guardada.";
+
+  await context.conversationRef.update({
+    postponedAt: FieldValue.serverTimestamp(),
+    postponedMessage: incoming.text.slice(0, 200),
+    updatedAt: FieldValue.serverTimestamp()
+  });
+
+  await sendAndSaveReply({ context, incoming, reply, suffix: "postpone" });
+  return buildResult(context, reply, context.conversation.stage, { postponed: true });
+}
+
 async function handleBuyingSignal({ context, incoming }) {
   const yaTieneMuestras =
     context.conversation.stage === CONVERSATION_STAGES.SAMPLES_SENT || Boolean(context.order.clipUrls?.length);
@@ -430,6 +452,10 @@ async function handleLyricsApprovalIntent({ context, incoming, extraction }) {
     await triggerSongProduction(context);
 
     return buildResult(context, reply, CONVERSATION_STAGES.PRODUCING_SONG);
+  }
+
+  if (extraction.intent === INTENTS.POSTPONE) {
+    return handlePostpone({ context, incoming });
   }
 
   if (extraction.intent === INTENTS.BUYING_SIGNAL) {
@@ -903,7 +929,16 @@ async function triggerSongProduction(context) {
 }
 
 function buildLyricsApprovalMessage(lyrics, intro = "Ya tengo una primera letra:", revisionsLeft = 0) {
-  return [intro, "", lyrics, "", buildApprovalClosing(revisionsLeft)].join("\n");
+  return [intro, "", toWhatsappFormat(lyrics), "", buildApprovalClosing(revisionsLeft)].join("\n");
+}
+
+// WhatsApp usa un solo asterisco para negritas: con los dos de Markdown, el
+// cliente ve "**Coro final**" tal cual en su pantalla.
+function toWhatsappFormat(text) {
+  return String(text || "")
+    .replace(/\*\*\*(.+?)\*\*\*/g, "*$1*")
+    .replace(/\*\*(.+?)\*\*/g, "*$1*")
+    .replace(/^#{1,6}\s*(.+)$/gm, "*$1*");
 }
 
 // La regla se dice al entregar la letra, que es cuando el cliente decide si

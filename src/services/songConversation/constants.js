@@ -52,6 +52,7 @@ export const INTENTS = {
   REQUEST_LYRICS_CHANGE: "request_lyrics_change",
   QUESTION: "question",
   BUYING_SIGNAL: "buying_signal",
+  POSTPONE: "postpone",
   UNKNOWN: "unknown"
 };
 
