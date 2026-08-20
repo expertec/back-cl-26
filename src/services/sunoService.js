@@ -8,7 +8,8 @@ export async function submitSunoSong(song) {
     model: song.sunoModel || config.sunoModel,
     customMode: true,
     instrumental: false,
-    title: song.title,
+    // Suno rechaza titulos de mas de 80 caracteres.
+    title: String(song.title || "Cancion personalizada").slice(0, 80).trim(),
     style: song.stylePrompt,
     prompt: song.lyrics,
     negativeTags: song.negativeTags || undefined,

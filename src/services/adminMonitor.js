@@ -38,7 +38,10 @@ const RETRY_TARGET = {
   "Error sin fullUrl": "Procesando musica",
   "Enviando musica": "Enviar musica",
   "Error envio": "Enviar musica",
-  Enviada: "Enviar musica"
+  Enviada: "Enviar musica",
+  // Estados de versiones anteriores del pipeline, que se escribian con acento.
+  "Error música": "Sin musica",
+  "Enviada completa": "Enviar musica"
 };
 
 // Cuanto puede tardar como mucho cada paso antes de considerarse atorado.
