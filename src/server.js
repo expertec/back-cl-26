@@ -7,6 +7,7 @@ import { jobsRouter } from "./routes/jobs.js";
 import { bootstrapWhatsappProvider, whatsappRouter } from "./routes/whatsapp.js";
 import { adminRouter } from "./routes/admin.js";
 import { startCron } from "./jobs/cron.js";
+import { ensureBootstrapUser } from "./services/authService.js";
 
 const app = express();
 
@@ -65,6 +66,10 @@ app.listen(config.port, () => {
     whatsappProvider: config.whatsappProvider,
     whatsappAuthStore: "firestore"
   });
+  ensureBootstrapUser().catch((error) => {
+    console.error("[auth] no se pudo crear el usuario inicial", { error: error.message });
+  });
+
   if (config.enableCron) startCron();
   bootstrapWhatsappProvider().catch((error) => {
     console.error("[whatsapp/bootstrap] failed:", error);

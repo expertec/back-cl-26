@@ -59,6 +59,10 @@ export const config = {
   inboundDebounceMs: Number(process.env.INBOUND_DEBOUNCE_MS || 8000),
   inboundBufferMaxWaitMs: Number(process.env.INBOUND_BUFFER_MAX_WAIT_MS || 45000),
   inboundBufferMaxMessages: Number(process.env.INBOUND_BUFFER_MAX_MESSAGES || 8),
+  // Firma de las sesiones del panel. Si cambia, todas las sesiones caducan.
+  authSecret: process.env.AUTH_SECRET || process.env.JOB_SECRET || "cantalab-panel-dev-secret",
+  adminBootstrapEmail: process.env.ADMIN_EMAIL || "",
+  adminBootstrapPassword: process.env.ADMIN_PASSWORD || "",
   enableCron: process.env.ENABLE_CRON !== "false",
   jobSecret: process.env.JOB_SECRET || ""
 };

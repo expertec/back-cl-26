@@ -1,5 +1,15 @@
 import { Router } from "express";
 import { z } from "zod";
+import {
+  authenticate,
+  changePassword,
+  createAdminUser,
+  listAdminUsers,
+  hasAnyUser,
+  requireAuth,
+  setAdminUserActive,
+  setupFirstUser
+} from "../services/authService.js";
 import { deleteLeadAndData, listKanbanLeads, updateLeadKanbanStage } from "../services/songConversation/index.js";
 import { cancelMusic, getMusicOverview, retryMusic } from "../services/adminMonitor.js";
 import { listEvents } from "../services/eventLog.js";
@@ -16,6 +26,71 @@ import {
 import { runMusicPipeline } from "../jobs/musicPipeline.js";
 
 export const adminRouter = Router();
+
+adminRouter.get("/setup-status", async (_req, res) => {
+  try {
+    res.set("Cache-Control", "no-store");
+    return res.json({ ok: true, needsSetup: !(await hasAnyUser()) });
+  } catch (error) {
+    return res.status(500).json({ ok: false, error: error.message });
+  }
+});
+
+adminRouter.post("/setup", async (req, res) => {
+  try {
+    const user = await setupFirstUser(req.body || {});
+    return res.status(201).json({ ok: true, user });
+  } catch (error) {
+    return res.status(400).json({ ok: false, error: error.message });
+  }
+});
+
+adminRouter.post("/login", async (req, res) => {
+  try {
+    const session = await authenticate({ email: req.body?.email, password: req.body?.password });
+    return res.json({ ok: true, ...session });
+  } catch (error) {
+    return res.status(401).json({ ok: false, error: error.message || "No se pudo iniciar sesion." });
+  }
+});
+
+adminRouter.get("/me", requireAuth, (req, res) => {
+  res.json({ ok: true, user: req.adminUser });
+});
+
+// De aqui en adelante todo exige sesion.
+adminRouter.use(requireAuth);
+
+adminRouter.get("/users", async (_req, res) => {
+  try {
+    return res.json({ ok: true, users: await listAdminUsers() });
+  } catch (error) {
+    return res.status(500).json({ ok: false, error: error.message });
+  }
+});
+
+adminRouter.post("/users", async (req, res) => {
+  try {
+    const user = await createAdminUser(req.body || {});
+    return res.status(201).json({ ok: true, user });
+  } catch (error) {
+    return res.status(400).json({ ok: false, error: error.message });
+  }
+});
+
+adminRouter.patch("/users/:email", async (req, res) => {
+  try {
+    if (typeof req.body?.active === "boolean") {
+      return res.json({ ok: true, ...(await setAdminUserActive(req.params.email, req.body.active)) });
+    }
+    if (req.body?.password) {
+      return res.json({ ok: true, ...(await changePassword(req.params.email, req.body.password)) });
+    }
+    return res.status(400).json({ ok: false, error: "Nada que actualizar." });
+  } catch (error) {
+    return res.status(400).json({ ok: false, error: error.message });
+  }
+});
 
 const updateLeadSchema = z.object({
   kanbanStage: z.enum([
