@@ -54,7 +54,7 @@ export const config = {
     .map((value) => value.replace(/\D/g, ""))
     .filter(Boolean),
   // Correcciones de letra permitidas por chat antes de pasar a un asesor.
-  maxLyricsRevisions: Number(process.env.MAX_LYRICS_REVISIONS || 3),
+  maxLyricsRevisions: Number(process.env.MAX_LYRICS_REVISIONS || 1),
   // Cuanto se espera a que el contacto termine de escribir antes de responder.
   inboundDebounceMs: Number(process.env.INBOUND_DEBOUNCE_MS || 8000),
   inboundBufferMaxWaitMs: Number(process.env.INBOUND_BUFFER_MAX_WAIT_MS || 45000),

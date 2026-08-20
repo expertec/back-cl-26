@@ -497,24 +497,35 @@ function getRevisionsUsed(order = {}) {
  * se le ofrece aprobar, y si insiste pasa a un asesor y el bot deja de contestar.
  */
 async function handleRevisionLimitReached({ context, incoming }) {
-  // Se insiste en aprobar, pero nunca se pasa al equipo por corregir una letra:
-  // el equipo entra a cerrar despues de la muestra, no a escribir versos. Antes
-  // se hacia takeover y la conversacion moria ahi con la muestra sin producir.
+  // Pedir un cambio mas no puede dejar la conversacion parada: se explica la
+  // regla y se produce la muestra con la letra que hay. Un cliente pidio cinco
+  // versiones distintas de una muestra gratuita antes de esto.
   const reply = [
-    "Ya hice los ajustes que tenemos disponibles para la muestra.",
+    "Para la muestra hacemos un solo cambio y ya lo aplicamos.",
     "",
-    "Te propongo producirla asi y la escuchas cantada: si algo no te late, lo afinamos en la version completa.",
-    "",
-    "¿La produzco?"
+    "Voy a producirla asi para que la escuches cantada. Cuando tengas tu cancion completa ajustamos la letra las veces que haga falta."
   ].join("\n");
 
   await context.orderRef.update({
+    lyricsApproved: true,
+    lyricsApprovedAt: FieldValue.serverTimestamp(),
+    musicStatus: "lyrics_approved",
     revisionLimitNotifiedAt: FieldValue.serverTimestamp(),
+    lyricsRevisionLock: FieldValue.delete(),
     updatedAt: FieldValue.serverTimestamp()
+  });
+  context.order = { ...context.order, lyricsApproved: true };
+
+  await setConversationStage({
+    conversationRef: context.conversationRef,
+    leadRef: context.leadRef,
+    stage: CONVERSATION_STAGES.PRODUCING_SONG
   });
 
   await sendAndSaveReply({ context, incoming, reply, suffix: "revision-limit" });
-  return buildResult(context, reply, CONVERSATION_STAGES.WAITING_LYRICS_APPROVAL);
+  await triggerSongProduction(context);
+
+  return buildResult(context, reply, CONVERSATION_STAGES.PRODUCING_SONG);
 }
 
 const GREETING_ONLY = /^(hola|buenas|buenos dias|buenas tardes|buenas noches|hey|que tal|holi|ola)[\s!.,¡]*$/i;
@@ -945,7 +956,10 @@ function toWhatsappFormat(text) {
 // gasta su ajuste o aprueba.
 function buildApprovalClosing(revisionsLeft) {
   if (revisionsLeft <= 0) {
-    return "Esta es la version final de la muestra. ¿La apruebo y produzco la musica?";
+    return [
+      "Esta es la version de la muestra: los cambios extra los hacemos ya con tu cancion completa.",
+      "¿La apruebo y produzco la musica?"
+    ].join(" ");
   }
 
   if (revisionsLeft === 1) {
@@ -954,6 +968,7 @@ function buildApprovalClosing(revisionsLeft) {
       "¿La dejamos asi o prefieres usar ese cambio antes de producir la musica?"
     ].join(" ");
   }
+
 
   return `Para la muestra puedo hacerle hasta ${revisionsLeft} cambios. ¿La dejamos asi o quieres ajustar algo?`;
 }
