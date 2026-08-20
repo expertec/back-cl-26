@@ -3,6 +3,14 @@ import { z } from "zod";
 import { deleteLeadAndData, listKanbanLeads, updateLeadKanbanStage } from "../services/songConversation/index.js";
 import { cancelMusic, getMusicOverview, retryMusic } from "../services/adminMonitor.js";
 import { listEvents } from "../services/eventLog.js";
+import { getConversationsHealth } from "../services/conversationMonitor.js";
+import {
+  forceApproveAndProduce,
+  forceGenerateLyrics,
+  forceProduce,
+  releaseConversationLocks,
+  sendManualMessage
+} from "../services/adminActions.js";
 import { runMusicPipeline } from "../jobs/musicPipeline.js";
 
 export const adminRouter = Router();
@@ -123,5 +131,41 @@ adminRouter.post("/pipeline/run", async (_req, res) => {
     return res.json({ ok: true, result });
   } catch (error) {
     return res.status(500).json({ ok: false, error: error.message || "No se pudo correr el pipeline." });
+  }
+});
+
+adminRouter.get("/conversations", async (req, res) => {
+  try {
+    const health = await getConversationsHealth({ limit: Number(req.query.limit || 120) });
+    res.set("Cache-Control", "no-store");
+    return res.json({ ok: true, ...health });
+  } catch (error) {
+    return res.status(500).json({ ok: false, error: error.message || "No se pudo cargar el estado." });
+  }
+});
+
+const CONVERSATION_ACTIONS = {
+  generar_letra: forceGenerateLyrics,
+  aprobar_y_producir: forceApproveAndProduce,
+  producir: forceProduce,
+  liberar_locks: releaseConversationLocks
+};
+
+adminRouter.post("/conversations/:leadId/:action", async (req, res) => {
+  const { leadId, action } = req.params;
+
+  try {
+    if (action === "mensaje") {
+      const result = await sendManualMessage(leadId, req.body?.message);
+      return res.json({ ok: true, ...result });
+    }
+
+    const handler = CONVERSATION_ACTIONS[action];
+    if (!handler) return res.status(400).json({ ok: false, error: `Accion desconocida: ${action}` });
+
+    const result = await handler(leadId);
+    return res.json({ ok: true, ...result });
+  } catch (error) {
+    return res.status(400).json({ ok: false, error: error.message || "No se pudo completar la accion." });
   }
 });
