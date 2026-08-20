@@ -8,13 +8,27 @@ const SCRYPT_KEYLEN = 64;
 const SESSION_DAYS = 30;
 
 /**
+ * owner  : el dueño de la cuenta. Manda sobre todo y nadie puede tocarlo.
+ * admin  : opera el CRM y da de alta gente, pero no puede tocar a un owner.
+ * agente : atiende conversaciones. No borra leads, no cambia la configuracion
+ *          ni da de alta usuarios, para que un descuido no cueste datos.
+ */
+export const ROLES = ["agente", "admin", "owner"];
+const ROLE_LEVEL = { agente: 1, admin: 2, owner: 3 };
+
+export function roleLevel(role) {
+  return ROLE_LEVEL[role] || 0;
+}
+
+/**
  * Autenticacion propia para el panel. Firebase Admin no puede verificar
  * contraseñas (eso solo lo hace el SDK del navegador o la REST API con la clave
  * web), asi que se guardan hashes con scrypt aqui y se emiten tokens firmados.
  */
-export async function createAdminUser({ email, password, name, role = "admin" }) {
+export async function createAdminUser({ email, password, name, role = "agente" }) {
   const normalized = normalizeEmail(email);
   if (!normalized) throw new Error("Correo invalido.");
+  if (!ROLES.includes(role)) throw new Error(`Rol invalido: ${role}`);
   if (String(password || "").length < 8) throw new Error("La contraseña debe tener al menos 8 caracteres.");
 
   const ref = db.collection(USERS_COLLECTION).doc(normalized);
@@ -65,16 +79,20 @@ export async function listAdminUsers() {
   });
 }
 
-export async function setAdminUserActive(email, active) {
+export async function setAdminUserActive(email, active, actor) {
   const normalized = normalizeEmail(email);
+  await assertCanManage(normalized, actor);
+
   await db.collection(USERS_COLLECTION).doc(normalized).update({ active: Boolean(active) });
   logEvent({ level: "warn", scope: "auth", message: `Usuario ${active ? "reactivado" : "desactivado"}: ${normalized}` });
   return { email: normalized, active: Boolean(active) };
 }
 
-export async function changePassword(email, password) {
+export async function changePassword(email, password, actor) {
   if (String(password || "").length < 8) throw new Error("La contraseña debe tener al menos 8 caracteres.");
   const normalized = normalizeEmail(email);
+  // Cambiarse la propia contraseña siempre se permite.
+  if (normalized !== actor?.email) await assertCanManage(normalized, actor);
   await db.collection(USERS_COLLECTION).doc(normalized).update({ passwordHash: hashPassword(password) });
   logEvent({ level: "warn", scope: "auth", message: `Contraseña cambiada: ${normalized}` });
   return { email: normalized };
@@ -113,6 +131,32 @@ export async function hasAnyUser() {
 export async function setupFirstUser({ email, password, name }) {
   if (await hasAnyUser()) throw new Error("El panel ya tiene usuarios. Pide acceso a un administrador.");
   return createAdminUser({ email, password, name, role: "owner" });
+}
+
+/**
+ * Nadie puede quitarse el acceso a si mismo ni actuar sobre alguien de rango
+ * igual o mayor: sin esto, dos administradores podrian bloquearse entre ellos o
+ * dejar la cuenta sin owner.
+ */
+async function assertCanManage(targetEmail, actor) {
+  if (!actor?.email) throw new Error("Sesion invalida.");
+  if (targetEmail === actor.email) throw new Error("No puedes modificar tu propio acceso.");
+
+  const snap = await db.collection(USERS_COLLECTION).doc(targetEmail).get();
+  if (!snap.exists) throw new Error("Usuario no encontrado.");
+
+  if (roleLevel(snap.data().role) >= roleLevel(actor.role)) {
+    throw new Error("No tienes permiso sobre ese usuario.");
+  }
+}
+
+export function requireRole(minRole) {
+  return (req, res, next) => {
+    if (roleLevel(req.adminUser?.role) < roleLevel(minRole)) {
+      return res.status(403).json({ ok: false, error: "No tienes permiso para esta accion." });
+    }
+    return next();
+  };
 }
 
 export function requireAuth(req, res, next) {

@@ -7,6 +7,8 @@ import {
   listAdminUsers,
   hasAnyUser,
   requireAuth,
+  requireRole,
+  ROLES,
   setAdminUserActive,
   setupFirstUser
 } from "../services/authService.js";
@@ -61,7 +63,11 @@ adminRouter.get("/me", requireAuth, (req, res) => {
 // De aqui en adelante todo exige sesion.
 adminRouter.use(requireAuth);
 
-adminRouter.get("/users", async (_req, res) => {
+adminRouter.get("/roles", requireRole("admin"), (_req, res) => {
+  res.json({ ok: true, roles: ROLES });
+});
+
+adminRouter.get("/users", requireRole("admin"), async (_req, res) => {
   try {
     return res.json({ ok: true, users: await listAdminUsers() });
   } catch (error) {
@@ -69,7 +75,7 @@ adminRouter.get("/users", async (_req, res) => {
   }
 });
 
-adminRouter.post("/users", async (req, res) => {
+adminRouter.post("/users", requireRole("admin"), async (req, res) => {
   try {
     const user = await createAdminUser(req.body || {});
     return res.status(201).json({ ok: true, user });
@@ -78,13 +84,19 @@ adminRouter.post("/users", async (req, res) => {
   }
 });
 
-adminRouter.patch("/users/:email", async (req, res) => {
+adminRouter.patch("/users/:email", requireRole("admin"), async (req, res) => {
   try {
     if (typeof req.body?.active === "boolean") {
-      return res.json({ ok: true, ...(await setAdminUserActive(req.params.email, req.body.active)) });
+      return res.json({
+        ok: true,
+        ...(await setAdminUserActive(req.params.email, req.body.active, req.adminUser))
+      });
     }
     if (req.body?.password) {
-      return res.json({ ok: true, ...(await changePassword(req.params.email, req.body.password)) });
+      return res.json({
+        ok: true,
+        ...(await changePassword(req.params.email, req.body.password, req.adminUser))
+      });
     }
     return res.status(400).json({ ok: false, error: "Nada que actualizar." });
   } catch (error) {
@@ -139,7 +151,7 @@ adminRouter.patch("/leads/:leadId", async (req, res) => {
   }
 });
 
-adminRouter.delete("/leads/:leadId", async (req, res) => {
+adminRouter.delete("/leads/:leadId", requireRole("admin"), async (req, res) => {
   const force = req.query.force === "true";
 
   try {
@@ -194,7 +206,7 @@ adminRouter.post("/songs/:musicId/retry", async (req, res) => {
   }
 });
 
-adminRouter.post("/songs/:musicId/cancel", async (req, res) => {
+adminRouter.post("/songs/:musicId/cancel", requireRole("admin"), async (req, res) => {
   try {
     const result = await cancelMusic(req.params.musicId);
     return res.json({ ok: true, ...result });
@@ -258,7 +270,7 @@ adminRouter.get("/settings", async (_req, res) => {
   }
 });
 
-adminRouter.put("/settings", async (req, res) => {
+adminRouter.put("/settings", requireRole("admin"), async (req, res) => {
   try {
     const settings = await updateBotSettings(req.body || {});
     return res.json({ ok: true, settings });
