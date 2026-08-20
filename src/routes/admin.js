@@ -19,6 +19,7 @@ import { deliverFullSong } from "../services/fullDelivery.js";
 import { getBotSettings, updateBotSettings } from "../services/botSettings.js";
 import { sendPendingFollowUps } from "../jobs/followUp.js";
 import {
+  getConversationDetail,
   getConversationMessages,
   getConversationsHealth,
   setConversationMode
@@ -323,5 +324,15 @@ adminRouter.post("/conversations/:leadId/mode", async (req, res) => {
     return res.json({ ok: true, ...(await setConversationMode(req.params.leadId, req.body?.mode)) });
   } catch (error) {
     return res.status(400).json({ ok: false, error: error.message });
+  }
+});
+
+adminRouter.get("/conversations/:leadId/detalle", async (req, res) => {
+  try {
+    const detail = await getConversationDetail(req.params.leadId);
+    res.set("Cache-Control", "no-store");
+    return res.json({ ok: true, ...detail });
+  } catch (error) {
+    return res.status(404).json({ ok: false, error: error.message });
   }
 });

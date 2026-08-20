@@ -337,3 +337,87 @@ export async function setConversationMode(leadId, mode) {
 
   return { mode };
 }
+
+/**
+ * Todo lo que un asesor necesita ver junto al chat: el brief que dio el cliente,
+ * la letra, y los audios para escucharlos sin salir del panel.
+ */
+export async function getConversationDetail(leadId) {
+  const conversationSnap = await db
+    .collection(COLLECTIONS.conversations)
+    .where("leadId", "==", leadId)
+    .where("active", "==", true)
+    .limit(1)
+    .get();
+
+  if (conversationSnap.empty) throw new Error("Este lead no tiene una conversacion activa.");
+
+  const conversation = conversationSnap.docs[0].data();
+  const [leadSnap, orderSnap] = await Promise.all([
+    db.collection(COLLECTIONS.leads).doc(leadId).get(),
+    conversation.songOrderId
+      ? db.collection(COLLECTIONS.songOrders).doc(conversation.songOrderId).get()
+      : Promise.resolve(null)
+  ]);
+
+  const lead = leadSnap.exists ? leadSnap.data() : {};
+  const order = orderSnap?.exists ? orderSnap.data() : {};
+
+  let music = null;
+  if (order.musicId) {
+    const musicSnap = await db.collection("musica").doc(order.musicId).get();
+    if (musicSnap.exists) {
+      const data = musicSnap.data();
+      music = {
+        id: musicSnap.id,
+        status: data.status || "",
+        title: data.title || "",
+        errorMsg: data.errorMsg || "",
+        clipUrls: data.clipUrls || [],
+        fullUrls: (data.fullVersions || []).map((item) => item.fullUrl).filter(Boolean).length
+          ? data.fullVersions.map((item) => item.fullUrl).filter(Boolean)
+          : data.fullUrls || [],
+        fullDelivered: Boolean(data.fullDeliveredAt),
+        fullDeliveredVersion: data.fullDeliveredVersion || null
+      };
+    }
+  }
+
+  return {
+    lead: {
+      id: leadId,
+      name: lead.name || "",
+      phone: lead.phone || "",
+      mode: conversation.mode || lead.mode || "ai",
+      kanbanStage: lead.kanbanStage || "",
+      source: lead.source || "",
+      adTitle: lead.adTitle || "",
+      createdAt: toMillis(lead.createdAt) || null
+    },
+    conversation: {
+      id: conversationSnap.docs[0].id,
+      stage: conversation.stage || "",
+      summary: conversation.summary || ""
+    },
+    order: {
+      id: conversation.songOrderId || null,
+      purpose: order.purpose || "",
+      recipient: order.recipient || "",
+      nickname: order.nickname || "",
+      relationship: order.relationship || "",
+      genre: order.genre || "",
+      referenceArtist: order.referenceArtist || "",
+      voiceType: order.voiceType || "",
+      clientName: order.clientName || "",
+      story: order.story || "",
+      lyrics: order.lyrics || "",
+      lyricsApproved: Boolean(order.lyricsApproved),
+      lyricsVersion: Number(order.lyricsVersion || 0),
+      lyricsRevisionCount: Number(order.lyricsRevisionCount || 0),
+      musicId: order.musicId || null,
+      musicStatus: order.musicStatus || "",
+      missingFields: getMissingFields(order)
+    },
+    music
+  };
+}
