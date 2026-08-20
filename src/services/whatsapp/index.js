@@ -11,9 +11,9 @@ import {
   sendBaileysText
 } from "./baileysSessionService.js";
 
-export async function sendText({ phone, message, idempotencyKey }) {
+export async function sendText({ phone, message, idempotencyKey, quoted }) {
   if (config.whatsappProvider === "baileys") {
-    return sendBaileysText({ phone, message, idempotencyKey });
+    return sendBaileysText({ phone, message, idempotencyKey, quoted });
   }
 
   if (config.whatsappProvider === "vev") {

@@ -289,9 +289,20 @@ export async function restoreBaileysSessions() {
   return sessionIds.length;
 }
 
-export async function sendBaileysText({ phone, message, sessionId = config.baileysSessionId }) {
+export async function sendBaileysText({ phone, message, quoted, sessionId = config.baileysSessionId }) {
   const sock = requireSock(sessionId);
-  return sock.sendMessage(toJid(phone), { text: String(message || ""), linkPreview: false }, { timeoutMs: SEND_TIMEOUT_MS });
+  const options = { timeoutMs: SEND_TIMEOUT_MS, ...(quoted ? { quoted } : {}) };
+
+  try {
+    return await sock.sendMessage(toJid(phone), { text: String(message || ""), linkPreview: false }, options);
+  } catch (error) {
+    if (!quoted) throw error;
+
+    // El mensaje citado se guarda serializado y no siempre reconstruye bien;
+    // vale mas entregar el texto sin la cita que no entregarlo.
+    console.warn("[baileys] no se pudo citar el mensaje, se envia sin cita", { error: error.message });
+    return sock.sendMessage(toJid(phone), { text: String(message || ""), linkPreview: false }, { timeoutMs: SEND_TIMEOUT_MS });
+  }
 }
 
 export async function sendBaileysAudio({ phone, audioUrl, mimetype, sessionId = config.baileysSessionId }) {

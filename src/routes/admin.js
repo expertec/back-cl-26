@@ -254,7 +254,7 @@ adminRouter.post("/conversations/:leadId/:action", async (req, res) => {
 
   try {
     if (action === "mensaje") {
-      const result = await sendManualMessage(leadId, req.body?.message);
+      const result = await sendManualMessage(leadId, req.body?.message, req.body?.replyTo);
       return res.json({ ok: true, ...result });
     }
 

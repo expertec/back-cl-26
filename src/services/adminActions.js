@@ -138,15 +138,33 @@ export async function releaseConversationLocks(leadId) {
   return { released: true };
 }
 
-export async function sendManualMessage(leadId, message) {
+export async function sendManualMessage(leadId, message, replyToId) {
   const text = String(message || "").trim();
   if (!text) throw new Error("El mensaje viene vacio.");
 
   const context = await loadContext(leadId);
-  await notify(context, text);
+  const replyTo = replyToId ? await loadQuoted(context.conversationRef, replyToId) : null;
+
+  await notify(context, text, replyTo);
 
   logEvent({ level: "info", scope: "admin", message: "Mensaje manual enviado", leadId, phone: context.lead.phone, detail: text });
   return { sent: true };
+}
+
+/**
+ * Para citar, Baileys necesita el mensaje original tal como llego. Se guarda en
+ * `raw` de cada mensaje, asi que se recupera de ahi junto con su texto, que es
+ * lo que se muestra en la cita dentro del panel.
+ */
+async function loadQuoted(conversationRef, messageId) {
+  const snap = await conversationRef.collection("messages").doc(messageId).get();
+  if (!snap.exists) return null;
+
+  const data = snap.data();
+  const raw = data.raw;
+  const quoted = raw?.key && raw?.message ? { key: raw.key, message: raw.message } : null;
+
+  return { id: snap.id, text: data.text || "", direction: data.direction, quoted };
 }
 
 async function loadContext(leadId) {
@@ -179,17 +197,25 @@ async function loadContext(leadId) {
   };
 }
 
-async function notify(context, message) {
+async function notify(context, message, replyTo = null) {
   const delivery = await sendText({
     phone: context.lead.waJid || context.lead.phone,
     message,
-    idempotencyKey: `manual-${context.conversationRef.id}-${Date.now()}`
+    idempotencyKey: `manual-${context.conversationRef.id}-${Date.now()}`,
+    quoted: replyTo?.quoted || undefined
   });
 
   await db.collection(COLLECTIONS.conversations).doc(context.conversationRef.id).collection("messages").add({
     direction: "out",
     text: message,
     manual: true,
+    ...(replyTo
+      ? {
+          replyToId: replyTo.id,
+          replyToText: replyTo.text.slice(0, 180),
+          replyToDirection: replyTo.direction
+        }
+      : {}),
     createdAt: FieldValue.serverTimestamp()
   });
 

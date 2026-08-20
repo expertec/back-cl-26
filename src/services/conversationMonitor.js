@@ -300,6 +300,9 @@ export async function getConversationMessages(leadId, { limit = 80 } = {}) {
         text: data.text || "",
         manual: Boolean(data.manual),
         followUp: data.followUp || null,
+        replyToId: data.replyToId || null,
+        replyToText: data.replyToText || "",
+        replyToDirection: data.replyToDirection || null,
         createdAt: data.createdAt?.toDate?.()?.getTime?.() || null
       };
     })
