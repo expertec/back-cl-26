@@ -21,7 +21,11 @@ const UMBRALES = {
  * respecto.
  */
 export async function getConversationsHealth({ limit = 120 } = {}) {
-  const conversationSnap = await db.collection(COLLECTIONS.conversations).where("active", "==", true).limit(limit).get();
+  const conversationSnap = await db
+    .collection(COLLECTIONS.conversations)
+    .where("active", "==", true)
+    .limit(Math.min(limit, 300))
+    .get();
   if (conversationSnap.empty) return { items: [], counts: {}, needsAttention: 0 };
 
   const conversations = conversationSnap.docs.map((doc) => ({ id: doc.id, ...doc.data() }));
