@@ -5,6 +5,7 @@ import { extractAudioUrlsFromRecordInfo, getSunoGenerationDetails, submitSunoSon
 import { createWatermarkedClip, persistFullAudio } from "../services/audioService.js";
 import { sendSongWithWhatsapp } from "../services/whatsappDeliveryService.js";
 import { markSongDelivered } from "../services/songProduction.js";
+import { logEvent } from "../services/eventLog.js";
 
 const MUSIC_COLLECTION = "musica";
 const RETRYABLE_SUNO_FAILURES = new Set(["CREATE_TASK_FAILED", "GENERATE_AUDIO_FAILED", "CALLBACK_EXCEPTION", "FAILED"]);
@@ -25,6 +26,14 @@ async function moveStatus(ref, status, extra = {}) {
     ...extra
   });
   console.log("[music] status", { id: ref.id, status });
+
+  logEvent({
+    level: status.startsWith("Error") ? "error" : "info",
+    scope: "pipeline",
+    message: status,
+    musicId: ref.id,
+    detail: extra.errorMsg || extra.audioPersistError || extra.sunoPollError || null
+  });
 }
 
 function getStartedAtForStatus(data) {

@@ -3,6 +3,7 @@ import { config } from "../../config.js";
 import { db, FieldValue } from "../../firebase.js";
 import { normalizePhone } from "../../schemas.js";
 import { createLyrics, reviseLyrics } from "../openaiService.js";
+import { logEvent } from "../eventLog.js";
 import { startSongProduction } from "../songProduction.js";
 import { sendText } from "../whatsapp/index.js";
 import { COLLECTIONS, CONVERSATION_STAGES, INTENTS, WELCOME_MESSAGE } from "./constants.js";
@@ -66,6 +67,15 @@ export async function processIncomingWhatsappMessage(incoming) {
       errorAt: FieldValue.serverTimestamp(),
       updatedAt: FieldValue.serverTimestamp()
     });
+
+    logEvent({
+      level: "error",
+      scope: "conversacion",
+      message: "Fallo procesando un mensaje entrante",
+      phone: incoming.phone,
+      detail: error.message
+    });
+
     throw error;
   }
 }
