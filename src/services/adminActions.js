@@ -1,6 +1,6 @@
 import { db, FieldValue } from "../firebase.js";
 import { logEvent } from "./eventLog.js";
-import { createLyrics } from "./openaiService.js";
+import { createLyrics, extractBriefFromText } from "./openaiService.js";
 import { startSongProduction } from "./songProduction.js";
 import { COLLECTIONS, CONVERSATION_STAGES } from "./songConversation/constants.js";
 import { setConversationStage } from "./songConversation/conversationState.js";
@@ -386,15 +386,26 @@ export async function startNewSongOrder(leadId, { seedText = "" } = {}) {
 
   if (semilla) {
     try {
-      const extraccion = await extractFields({
-        messageText: semilla,
-        order: nuevoPedido,
-        conversation: { stage: CONVERSATION_STAGES.DISCOVERY },
-        recentMessages: []
-      });
+      // Primero el analisis del texto completo; si falla, el extractor de la
+      // conversacion, que al menos reconoce las formulas mas comunes.
+      let extraidos = {};
+      try {
+        extraidos = await extractBriefFromText(semilla);
+      } catch (error) {
+        console.warn("[venta] analisis del texto fallo, se usa el extractor de conversacion", {
+          error: error.message
+        });
+        const extraccion = await extractFields({
+          messageText: semilla,
+          order: nuevoPedido,
+          conversation: { stage: CONVERSATION_STAGES.DISCOVERY },
+          recentMessages: []
+        });
+        extraidos = extraccion.extractedFields || {};
+      }
 
       const campos = {};
-      for (const [campo, valor] of Object.entries(extraccion.extractedFields || {})) {
+      for (const [campo, valor] of Object.entries(extraidos)) {
         if (valor && !nuevoPedido[campo]) campos[campo] = valor;
       }
 

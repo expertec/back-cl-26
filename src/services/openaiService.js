@@ -230,3 +230,57 @@ function cleanTitle(value) {
   const lastSpace = cut.lastIndexOf(" ");
   return (lastSpace > 20 ? cut.slice(0, lastSpace) : cut).trim();
 }
+
+/**
+ * Extrae el pedido a partir de un texto largo, como cuando el cliente cuenta de
+ * corrido toda la historia. El extractor de la conversacion esta pensado para
+ * mensajes sueltos y en estos parrafos se quedaba corto, asi que el bot volvia a
+ * preguntar cosas que el cliente ya habia dicho.
+ */
+export async function extractBriefFromText(text) {
+  const prompt = `
+Lee lo que escribio un cliente que quiere una cancion personalizada y extrae los datos del pedido.
+
+Texto:
+"""
+${String(text || "").slice(0, 3000)}
+"""
+
+Devuelve JSON con estas claves, omitiendo las que el texto no respalde:
+- purpose: el motivo (cumpleanos, aniversario, homenaje, declarar amor, agradecer...)
+- recipient: para quien es la cancion (nombre propio si lo hay, si no la relacion: "mis hijos", "mi esposa")
+- relationship: la relacion con esa persona
+- nickname: apodo con el que le llaman
+- clientName: como se llama quien pide la cancion
+- story: los hechos y recuerdos concretos que deben aparecer en la letra
+- specialDetails: detalles sueltos que valga la pena incluir
+- genre, referenceArtist, voiceType: solo si los menciona
+
+Reglas:
+- No inventes nada. Si el texto no lo dice, omite la clave.
+- recipient debe salir del texto aunque no haya un nombre propio.
+- story en las palabras del cliente, resumido si es muy largo.
+  `.trim();
+
+  const result = await createJsonChatCompletion({
+    system: "Extraes datos de pedidos de canciones. Devuelves solo JSON con lo que el texto respalde.",
+    user: prompt,
+    temperature: 0.1,
+    maxTokens: 600
+  });
+
+  const permitidos = [
+    "purpose", "recipient", "relationship", "nickname", "clientName",
+    "story", "specialDetails", "genre", "referenceArtist", "voiceType"
+  ];
+
+  const campos = {};
+  for (const campo of permitidos) {
+    const valor = result?.[campo];
+    if (typeof valor === "string" && valor.trim() && valor.trim().length < 1500) {
+      campos[campo] = valor.trim();
+    }
+  }
+
+  return campos;
+}
