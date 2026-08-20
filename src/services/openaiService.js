@@ -170,3 +170,63 @@ export async function transcribeAudio(buffer, filename = "nota-de-voz.ogg") {
 
   return String(response?.text || "").trim();
 }
+
+const MAX_TITLE_CHARS = 80;
+
+/**
+ * El titulo se armaba concatenando lo que escribia el cliente, y salian cosas
+ * como "Cancion para Para mi" o titulos de 90 caracteres que Suno rechaza.
+ * Aqui se pide uno corto y con gancho, con la concatenacion como respaldo.
+ */
+export async function createSongTitle(song) {
+  const prompt = `
+Escribe el titulo de una cancion personalizada.
+
+Datos:
+- Para: ${song.recipientName || "una persona querida"}
+- Ocasion: ${song.occasion || "cancion personalizada"}
+- Historia: ${(song.story || "").slice(0, 400) || "sin detalles"}
+- Genero: ${song.genre || "balada"}
+
+Reglas:
+- Maximo 45 caracteres.
+- En español, evocador y sencillo, como un titulo real de cancion.
+- Puedes usar el nombre propio del destinatario si lo hay, nunca "mi novio" ni "mi pareja".
+- No uses comillas, ni la palabra "cancion", ni dos puntos.
+- Responde solo con el titulo.
+  `.trim();
+
+  try {
+    const response = await getClient().chat.completions.create({
+      model: config.openaiModel,
+      messages: [
+        { role: "system", content: "Titulas canciones. Respondes solo con el titulo, sin comillas ni explicaciones." },
+        { role: "user", content: prompt }
+      ],
+      temperature: 0.8,
+      max_tokens: 30
+    });
+
+    const title = cleanTitle(response.choices[0]?.message?.content);
+    if (title) return title;
+  } catch (error) {
+    console.warn("[openai] no se pudo generar el titulo, se usa el de respaldo", { message: error.message });
+  }
+
+  return cleanTitle(song.title) || "Cancion personalizada";
+}
+
+function cleanTitle(value) {
+  const title = String(value || "")
+    .replace(/["“”'']/g, "")
+    .replace(/\s+/g, " ")
+    .replace(/[.:;]+$/, "")
+    .trim();
+
+  if (!title) return "";
+  if (title.length <= MAX_TITLE_CHARS) return title;
+
+  const cut = title.slice(0, MAX_TITLE_CHARS);
+  const lastSpace = cut.lastIndexOf(" ");
+  return (lastSpace > 20 ? cut.slice(0, lastSpace) : cut).trim();
+}
