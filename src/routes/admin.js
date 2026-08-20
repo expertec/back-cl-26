@@ -3,6 +3,8 @@ import { z } from "zod";
 import { deleteLeadAndData, listKanbanLeads, updateLeadKanbanStage } from "../services/songConversation/index.js";
 import { cancelMusic, getMusicOverview, retryMusic } from "../services/adminMonitor.js";
 import { listEvents } from "../services/eventLog.js";
+import { getBotSettings, updateBotSettings } from "../services/botSettings.js";
+import { sendPendingFollowUps } from "../jobs/followUp.js";
 import { getConversationsHealth } from "../services/conversationMonitor.js";
 import {
   forceApproveAndProduce,
@@ -168,5 +170,33 @@ adminRouter.post("/conversations/:leadId/:action", async (req, res) => {
     return res.json({ ok: true, ...result });
   } catch (error) {
     return res.status(400).json({ ok: false, error: error.message || "No se pudo completar la accion." });
+  }
+});
+
+adminRouter.get("/settings", async (_req, res) => {
+  try {
+    const settings = await getBotSettings({ fresh: true });
+    res.set("Cache-Control", "no-store");
+    return res.json({ ok: true, settings });
+  } catch (error) {
+    return res.status(500).json({ ok: false, error: error.message || "No se pudo leer la configuracion." });
+  }
+});
+
+adminRouter.put("/settings", async (req, res) => {
+  try {
+    const settings = await updateBotSettings(req.body || {});
+    return res.json({ ok: true, settings });
+  } catch (error) {
+    return res.status(400).json({ ok: false, error: error.message || "No se pudo guardar." });
+  }
+});
+
+adminRouter.post("/settings/run-followups", async (_req, res) => {
+  try {
+    const sent = await sendPendingFollowUps();
+    return res.json({ ok: true, sent });
+  } catch (error) {
+    return res.status(500).json({ ok: false, error: error.message || "No se pudieron enviar." });
   }
 });

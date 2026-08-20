@@ -191,7 +191,7 @@ async function handleAiConversation({ context, incoming }) {
   }
 
   if (extraction.intent === INTENTS.BUYING_SIGNAL) {
-    return handOverToSales({ context, incoming });
+    return handleBuyingSignal({ context, incoming });
   }
 
   if (POST_APPROVAL_STAGES.has(context.conversation.stage)) {
@@ -212,6 +212,51 @@ async function handleAiConversation({ context, incoming }) {
  * y el bot se quedaba mudo ademas de regresar el lead a "Revisando letra".
  */
 /**
+ * El equipo solo cierra ventas despues de que el cliente escucho su muestra.
+ * Antes de eso, preguntar el precio no es motivo para pasarlo con nadie: se le
+ * explica que la muestra es gratis y se sigue con el brief, que es lo que lleva
+ * a la venta. Mandarlo al equipo con el pedido vacio lo dejaba muerto ahi.
+ */
+async function handleBuyingSignal({ context, incoming }) {
+  const yaTieneMuestras =
+    context.conversation.stage === CONVERSATION_STAGES.SAMPLES_SENT || Boolean(context.order.clipUrls?.length);
+
+  if (yaTieneMuestras) return handOverToSales({ context, incoming });
+
+  const missingFields = getMissingFields(context.order);
+
+  if (!missingFields.length) {
+    return completeBriefAndGenerateLyrics({ context, incoming });
+  }
+
+  const question = await generateNextQuestion({
+    missingFields,
+    order: context.order,
+    conversation: context.conversation
+  });
+
+  const reply = [
+    "Primero te hago una muestra sin costo para que la escuches, y ya despues vemos precios de la version completa.",
+    "",
+    question
+  ].join("\n");
+
+  const nextField = selectNextField(missingFields, context.conversation.lastAskedFields || []);
+  await setConversationStage({
+    conversationRef: context.conversationRef,
+    leadRef: context.leadRef,
+    stage: CONVERSATION_STAGES.WAITING_DISCOVERY_REPLY,
+    extra: {
+      missingFields,
+      lastAskedFields: nextField ? FieldValue.arrayUnion(nextField) : FieldValue.delete()
+    }
+  });
+
+  await sendAndSaveReply({ context, incoming, reply, suffix: "muestra-gratis" });
+  return buildResult(context, reply, CONVERSATION_STAGES.WAITING_DISCOVERY_REPLY, { missingFields });
+}
+
+/**
  * Al pasar a ventas el bot se calla y la conversacion queda en modo humano: si
  * sigue contestando, el cliente recibe "te paso con el equipo" en bucle cada vez
  * que escribe, que es justo cuando mas atencion necesita.
@@ -224,7 +269,13 @@ async function handOverToSales({ context, incoming }) {
   });
 
   await Promise.all([
-    context.leadRef.update({ mode: "human", updatedAt: FieldValue.serverTimestamp() }),
+    context.leadRef.update({
+      mode: "human",
+      kanbanStage: "opportunity",
+      opportunityAt: FieldValue.serverTimestamp(),
+      opportunitySignal: incoming.text.slice(0, 200),
+      updatedAt: FieldValue.serverTimestamp()
+    }),
     context.conversationRef.update({ mode: "human", updatedAt: FieldValue.serverTimestamp() })
   ]);
 
@@ -382,7 +433,7 @@ async function handleLyricsApprovalIntent({ context, incoming, extraction }) {
   }
 
   if (extraction.intent === INTENTS.BUYING_SIGNAL) {
-    return handOverToSales({ context, incoming });
+    return handleBuyingSignal({ context, incoming });
   }
 
   // Con la letra en pantalla, casi todo lo que escribe el cliente es feedback
@@ -420,31 +471,22 @@ function getRevisionsUsed(order = {}) {
  * se le ofrece aprobar, y si insiste pasa a un asesor y el bot deja de contestar.
  */
 async function handleRevisionLimitReached({ context, incoming }) {
-  if (context.order.revisionLimitNotifiedAt) {
-    await context.leadRef.update({ mode: "human", updatedAt: FieldValue.serverTimestamp() });
-    await context.conversationRef.update({ mode: "human", updatedAt: FieldValue.serverTimestamp() });
-    await setConversationStage({
-      conversationRef: context.conversationRef,
-      leadRef: context.leadRef,
-      stage: CONVERSATION_STAGES.HUMAN_TAKEOVER
-    });
-
-    const reply = "Voy a pasarte con alguien del equipo para afinar la letra contigo.";
-    await sendAndSaveReply({ context, incoming, reply, suffix: "revision-limit-human" });
-    return buildResult(context, reply, CONVERSATION_STAGES.HUMAN_TAKEOVER);
-  }
+  // Se insiste en aprobar, pero nunca se pasa al equipo por corregir una letra:
+  // el equipo entra a cerrar despues de la muestra, no a escribir versos. Antes
+  // se hacia takeover y la conversacion moria ahi con la muestra sin producir.
+  const reply = [
+    "Ya hice los ajustes que tenemos disponibles para la muestra.",
+    "",
+    "Te propongo producirla asi y la escuchas cantada: si algo no te late, lo afinamos en la version completa.",
+    "",
+    "¿La produzco?"
+  ].join("\n");
 
   await context.orderRef.update({
     revisionLimitNotifiedAt: FieldValue.serverTimestamp(),
     updatedAt: FieldValue.serverTimestamp()
   });
-  context.order = { ...context.order, revisionLimitNotifiedAt: true };
 
-  const reply = [
-    "Ya hice el ajuste que tenemos disponible por aqui.",
-    "",
-    "¿La dejamos asi y produzco la musica, o prefieres que te contacte alguien del equipo?"
-  ].join("\n");
   await sendAndSaveReply({ context, incoming, reply, suffix: "revision-limit" });
   return buildResult(context, reply, CONVERSATION_STAGES.WAITING_LYRICS_APPROVAL);
 }
