@@ -294,9 +294,13 @@ export async function sendBaileysText({ phone, message, sessionId = config.baile
   return sock.sendMessage(toJid(phone), { text: String(message || ""), linkPreview: false }, { timeoutMs: SEND_TIMEOUT_MS });
 }
 
-export async function sendBaileysAudio({ phone, audioUrl, sessionId = config.baileysSessionId }) {
+export async function sendBaileysAudio({ phone, audioUrl, mimetype, sessionId = config.baileysSessionId }) {
   const sock = requireSock(sessionId);
-  return sock.sendMessage(toJid(phone), { audio: { url: audioUrl }, mimetype: "audio/mp4" }, { timeoutMs: SEND_TIMEOUT_MS });
+  return sock.sendMessage(
+    toJid(phone),
+    { audio: { url: audioUrl }, mimetype: mimetype || "audio/mp4" },
+    { timeoutMs: SEND_TIMEOUT_MS }
+  );
 }
 
 export async function sendBaileysDocument({ phone, url, filename, mimetype, caption, sessionId = config.baileysSessionId }) {

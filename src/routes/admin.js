@@ -15,6 +15,7 @@ import {
 import { deleteLeadAndData, listKanbanLeads, updateLeadKanbanStage } from "../services/songConversation/index.js";
 import { cancelMusic, getMusicOverview, retryMusic } from "../services/adminMonitor.js";
 import { listEvents } from "../services/eventLog.js";
+import { deliverFullSong } from "../services/fullDelivery.js";
 import { getBotSettings, updateBotSettings } from "../services/botSettings.js";
 import { sendPendingFollowUps } from "../jobs/followUp.js";
 import { getConversationsHealth } from "../services/conversationMonitor.js";
@@ -287,5 +288,18 @@ adminRouter.post("/settings/run-followups", async (_req, res) => {
     return res.json({ ok: true, sent });
   } catch (error) {
     return res.status(500).json({ ok: false, error: error.message || "No se pudieron enviar." });
+  }
+});
+
+adminRouter.post("/songs/:musicId/deliver-full", requireRole("admin"), async (req, res) => {
+  try {
+    const result = await deliverFullSong({
+      musicId: req.params.musicId,
+      version: Number(req.body?.version || 1),
+      actor: req.adminUser
+    });
+    return res.json({ ok: true, ...result });
+  } catch (error) {
+    return res.status(400).json({ ok: false, error: error.message || "No se pudo entregar la cancion." });
   }
 });

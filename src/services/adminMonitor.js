@@ -64,7 +64,8 @@ const STAGE_TIMEOUT_MINUTES = {
 const SUMMARY_FIELDS = [
   "status", "title", "leadPhone", "phone", "customerName", "recipientName", "source",
   "errorMsg", "audioPersistError", "sunoPollError", "sunoStatus", "taskId", "clipUrls",
-  "sendAttemptCount", "leadId", "songOrderId", "lyrics", "createdAt", "updatedAt"
+  "sendAttemptCount", "leadId", "songOrderId", "lyrics", "createdAt", "updatedAt",
+  "fullUrls", "fullVersions", "fullDeliveredAt", "fullDeliveredVersion", "paid", "conversationId"
 ];
 
 const SEARCH_SCAN_LIMIT = 500;
@@ -203,6 +204,9 @@ function toSongSummary(doc) {
     sunoStatus: data.sunoStatus || "",
     taskId: data.taskId || "",
     clips: (data.clipUrls || []).length,
+    fullVersions: (data.fullVersions || data.fullUrls || []).length,
+    fullDelivered: Boolean(data.fullDeliveredAt),
+    fullDeliveredVersion: data.fullDeliveredVersion || null,
     sendAttemptCount: Number(data.sendAttemptCount || 0),
     leadId: data.leadId || null,
     songOrderId: data.songOrderId || null,

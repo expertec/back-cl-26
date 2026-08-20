@@ -23,9 +23,9 @@ export async function sendText({ phone, message, idempotencyKey }) {
   return sendKanwapText({ phone, message, idempotencyKey });
 }
 
-export async function sendAudio({ phone, audioUrl, idempotencyKey, caption }) {
+export async function sendAudio({ phone, audioUrl, idempotencyKey, caption, mimetype }) {
   if (config.whatsappProvider === "baileys") {
-    return sendBaileysAudio({ phone, audioUrl, idempotencyKey, caption });
+    return sendBaileysAudio({ phone, audioUrl, idempotencyKey, caption, mimetype });
   }
 
   if (config.whatsappProvider === "vev") {
