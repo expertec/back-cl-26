@@ -59,23 +59,67 @@ const STAGE_TIMEOUT_MINUTES = {
   "Enviar musica": 10
 };
 
-export async function getMusicOverview({ limit = 60, status } = {}) {
-  let query = db.collection(MUSIC_COLLECTION).orderBy("updatedAt", "desc");
+// Solo los campos que se muestran o se buscan: los documentos guardan tambien
+// la respuesta cruda de Suno, que pesa mucho mas que todo lo demas junto.
+const SUMMARY_FIELDS = [
+  "status", "title", "leadPhone", "phone", "customerName", "recipientName", "source",
+  "errorMsg", "audioPersistError", "sunoPollError", "sunoStatus", "taskId", "clipUrls",
+  "sendAttemptCount", "leadId", "songOrderId", "lyrics", "createdAt", "updatedAt"
+];
+
+const SEARCH_SCAN_LIMIT = 500;
+
+export async function getMusicOverview({ limit = 60, status, q } = {}) {
+  const search = normalizeSearch(q);
+  // Buscar exige recorrer mas documentos: Firestore no hace texto completo.
+  const scanLimit = search ? SEARCH_SCAN_LIMIT : Math.min(limit, 200);
+
+  let query = db.collection(MUSIC_COLLECTION).select(...SUMMARY_FIELDS).orderBy("updatedAt", "desc");
   if (status) query = query.where("status", "==", status);
 
-  const snap = await query.limit(Math.min(limit, 200)).get();
-  const songs = snap.docs.map((doc) => toSongSummary(doc));
+  const snap = await query.limit(scanLimit).get();
+  let songs = snap.docs.map((doc) => toSongSummary(doc));
+
+  const scanned = songs.length;
+  if (search) songs = songs.filter((song) => matchesSearch(song, search)).slice(0, Math.min(limit, 200));
 
   const counts = {};
   for (const song of songs) {
     counts[song.status] = (counts[song.status] || 0) + 1;
   }
 
+  const stuck = songs.filter((song) => song.stuck).length;
+  // La letra completa solo sirve para buscar del lado del servidor; mandarla
+  // entera por cada resultado multiplicaria el peso de la respuesta.
+  const payload = songs.map(({ lyricsText, ...song }) => song);
+
   return {
-    songs,
+    songs: payload,
     counts,
-    stuck: songs.filter((song) => song.stuck).length
+    stuck,
+    ...(search ? { search: q, scanned, found: payload.length } : {})
   };
+}
+
+function normalizeSearch(value) {
+  return String(value || "")
+    .trim()
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "");
+}
+
+function matchesSearch(song, search) {
+  // Un numero se busca solo contra telefonos, para que "2025" no traiga letras.
+  const onlyDigits = /^[\d\s+()-]+$/.test(search);
+  if (onlyDigits) {
+    const digits = search.replace(/\D/g, "");
+    return digits.length >= 3 && String(song.leadPhone || "").includes(digits);
+  }
+
+  return [song.title, song.customerName, song.recipientName, song.lyricsText].some((field) =>
+    normalizeSearch(field).includes(search)
+  );
 }
 
 export async function retryMusic(musicId) {
@@ -144,9 +188,13 @@ function toSongSummary(doc) {
   const minutesInStage = updatedAtMs ? Math.floor((Date.now() - updatedAtMs) / 60000) : null;
   const timeout = STAGE_TIMEOUT_MINUTES[data.status];
 
+  const lyricsText = data.lyrics || "";
+
   return {
     id: doc.id,
     status: data.status || "sin estado",
+    lyricsText,
+    lyricsExcerpt: lyricsText.slice(0, 160),
     title: data.title || "",
     leadPhone: data.leadPhone || data.phone || "",
     customerName: data.customerName || "",

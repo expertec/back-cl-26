@@ -84,7 +84,8 @@ adminRouter.get("/songs", async (req, res) => {
   try {
     const overview = await getMusicOverview({
       limit: Number(req.query.limit || 60),
-      status: req.query.status || undefined
+      status: req.query.status || undefined,
+      q: req.query.q || undefined
     });
     res.set("Cache-Control", "no-store");
     return res.json({ ok: true, ...overview });
