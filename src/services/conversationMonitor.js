@@ -100,6 +100,9 @@ function buildItem({ conversation, lead, order, music }) {
     lastMessage: (lead.lastMessage || "").slice(0, 140),
     lastBotReply: (conversation.lastBotReply || "").slice(0, 140),
     lastMessageAt,
+    lastBotReplyAt,
+    // Ultima actividad venga de quien venga: es lo que ordena un chat.
+    lastActivityAt: Math.max(lastMessageAt || 0, lastBotReplyAt || 0) || null,
     minutesSinceMessage,
     minutesInStage,
     missingFields,
