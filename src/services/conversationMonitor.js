@@ -369,6 +369,11 @@ export async function getConversationDetail(leadId) {
   const lead = leadSnap.exists ? leadSnap.data() : {};
   const order = orderSnap?.exists ? orderSnap.data() : {};
 
+  // Todas las canciones del cliente, no solo la del pedido abierto: al abrir un
+  // segundo pedido las anteriores dejaban de verse y no habia forma de
+  // entregarlas, ni siquiera a quien ya habia pagado.
+  const songs = await getSongsByLead(leadId);
+
   let music = null;
   if (order.musicId) {
     const musicSnap = await db.collection("musica").doc(order.musicId).get();
@@ -390,6 +395,7 @@ export async function getConversationDetail(leadId) {
   }
 
   return {
+    songs,
     lead: {
       id: leadId,
       name: lead.name || "",
@@ -426,4 +432,28 @@ export async function getConversationDetail(leadId) {
     },
     music
   };
+}
+
+async function getSongsByLead(leadId) {
+  const snap = await db.collection("musica").where("leadId", "==", leadId).get();
+
+  return snap.docs
+    .map((doc) => {
+      const data = doc.data();
+      const fullVersions = (data.fullVersions || []).map((item) => item?.fullUrl).filter(Boolean);
+
+      return {
+        id: doc.id,
+        title: data.title || "",
+        status: data.status || "",
+        errorMsg: data.errorMsg || "",
+        clipUrls: data.clipUrls || [],
+        fullUrls: fullVersions.length ? fullVersions : data.fullUrls || [],
+        fullDelivered: Boolean(data.fullDeliveredAt),
+        fullDeliveredVersion: data.fullDeliveredVersion || null,
+        songOrderId: data.songOrderId || null,
+        createdAt: toMillis(data.createdAt) || null
+      };
+    })
+    .sort((a, b) => (a.createdAt || 0) - (b.createdAt || 0));
 }
