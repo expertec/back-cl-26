@@ -249,6 +249,27 @@ function isShortApproval(text = "") {
   return words.every((word) => APPROVAL_WORDS.has(word));
 }
 
+/**
+ * Sacado de las conversaciones reales: "no veo los precios", "que tengo que
+ * hacer", "y cuando cuesta". Con la lista corta anterior, esa gente se quedaba
+ * sin respuesta aunque estuviera pidiendo comprar.
+ */
+const COMPRA_REGEX = new RegExp(
+  [
+    "cuanto cuesta", "cuando cuesta", "que precio", "precio", "cuanto es", "cuanto seria",
+    "no veo los precios", "no veo el precio", "cuanto vale", "costo",
+    "que tengo que hacer", "como le hago", "como la compro", "como lo compro",
+    "donde pago", "como pago", "como te pago", "formas de pago", "metodos de pago",
+    "la quiero comprar", "quiero comprarla", "quiero la completa", "la version completa",
+    "me la llevo", "como la consigo", "ya quiero mi cancion"
+  ].join("|"),
+  "i"
+);
+
+function normalizarTexto(valor) {
+  return String(valor || "").toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+}
+
 const LETRA_EXPLICITA =
   /\b(esta es (mi|la) letra|mi propia letra|con esta letra|usa esta letra|ya tengo la letra|te paso la letra|la letra es esta|quiero esta letra|letra que escribi)\b/i;
 
@@ -369,7 +390,7 @@ function heuristicExtraction(text = "", stage = "") {
     intent = INTENTS.APPROVE_LYRICS;
   } else if (/(cambia|corrige|modifica|quita|agrega|ponle)/i.test(text)) {
     intent = INTENTS.REQUEST_LYRICS_CHANGE;
-  } else if (/(cuanto cuesta|precio|compr|completa|me gusta la|quiero esa|me encanto)/i.test(lower)) {
+  } else if (COMPRA_REGEX.test(lower) || COMPRA_REGEX.test(normalizarTexto(text))) {
     intent = INTENTS.BUYING_SIGNAL;
   }
 

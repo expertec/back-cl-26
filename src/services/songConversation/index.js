@@ -424,245 +424,78 @@ async function handOverToSales({ context, incoming }) {
 async function handlePostApprovalMessage({ context, incoming }) {
   const stage = context.conversation.stage;
 
-  // Ya escucho su cancion: preguntas de precio, quejas del genero o cualquier
-  // comentario con contenido son trabajo de una persona. Antes se contestaba
-  // "te paso con el equipo" sin pasar a nadie, y el lead se quedaba en el bot.
-  if (stage === CONVERSATION_STAGES.SAMPLES_SENT && isActionableFeedback(incoming.text)) {
-    return handOverToSales({ context, incoming });
+  if (stage !== CONVERSATION_STAGES.SAMPLES_SENT) {
+    const reply = "Tu cancion ya se esta produciendo. En cuanto este te mando las versiones por aqui.";
+    await sendAndSaveReply({ context, incoming, reply, suffix: `post-approval-${stage}` });
+
+    if (!context.order.musicId) await triggerSongProduction(context);
+    return buildResult(context, reply, stage);
   }
+
+  // Ya escucho sus muestras. Aqui es donde se cierra o se pierde la venta, asi
+  // que se responde con el precio y como pagar, no con un "te paso con el
+  // equipo" que dejaba a la gente esperando dias.
+  const eleccion = detectarVersionElegida(incoming.text);
+  if (eleccion) {
+    await context.orderRef.update({
+      chosenVersion: eleccion,
+      chosenVersionAt: FieldValue.serverTimestamp(),
+      updatedAt: FieldValue.serverTimestamp()
+    });
+    await context.leadRef.update({ chosenVersion: eleccion, updatedAt: FieldValue.serverTimestamp() });
+  }
+
+  const settings = await getBotSettings();
+  const nombre = String(context.lead.name || "").trim().split(/\s+/)[0];
+
+  const encabezado = eleccion
+    ? `Excelente, nos vamos con la version ${eleccion}.`
+    : "Me da gusto que te haya gustado.";
 
   const reply =
-    stage === CONVERSATION_STAGES.SAMPLES_SENT
-      ? "Ya te envie las versiones con marca de agua. Si quieres la cancion completa en alta calidad, te paso con el equipo."
-      : "Tu cancion ya se esta produciendo. En cuanto este te mando las versiones por aqui.";
+    settings.priceMessageEnabled && settings.priceMessage
+      ? [encabezado, "", renderTemplate(settings.priceMessage, { nombre, telefono: context.lead.phone || "" }).trim()].join("\n")
+      : "Ya te envie las versiones con marca de agua. Si quieres la cancion completa en alta calidad, te paso con el equipo.";
 
-  await sendAndSaveReply({ context, incoming, reply, suffix: `post-approval-${stage}` });
+  await sendAndSaveReply({ context, incoming, reply, suffix: eleccion ? `eligio-v${eleccion}` : "post-muestras" });
 
-  // Si la produccion nunca arranco (error previo o deploy a medias), reintentamos.
-  if (stage !== CONVERSATION_STAGES.SAMPLES_SENT && !context.order.musicId) {
-    await triggerSongProduction(context);
-  }
+  await Promise.all([
+    context.leadRef.update({
+      kanbanStage: "opportunity",
+      opportunityAt: FieldValue.serverTimestamp(),
+      updatedAt: FieldValue.serverTimestamp()
+    }),
+    context.conversationRef.update({ mode: "human", updatedAt: FieldValue.serverTimestamp() })
+  ]);
 
-  return buildResult(context, reply, stage);
-}
-
-async function continueDiscovery({ context, incoming, missingFields }) {
-  const nextField = selectNextField(missingFields, context.conversation.lastAskedFields || []);
-  const question = await generateNextQuestion({
-    missingFields,
-    order: context.order,
-    conversation: context.conversation
+  logEvent({
+    level: "warn",
+    scope: "ventas",
+    message: eleccion ? `Eligio la version ${eleccion}: falta cobrar` : "Interesado tras la muestra",
+    leadId: context.leadRef.id,
+    phone: context.lead.phone,
+    detail: incoming.text
   });
 
-  // El lead llega de una campana con un mensaje predefinido: hay que presentarse
-  // antes de empezar a preguntar.
-  const isFirstContact = context.conversation.stage === CONVERSATION_STAGES.NEW_LEAD;
-  const reply = isFirstContact ? [WELCOME_MESSAGE, "", question].join("\n") : question;
-
-  await setConversationStage({
-    conversationRef: context.conversationRef,
-    leadRef: context.leadRef,
-    stage: CONVERSATION_STAGES.WAITING_DISCOVERY_REPLY,
-    extra: {
-      missingFields,
-      lastQuestionField: nextField || FieldValue.delete(),
-      lastAskedFields: nextField ? FieldValue.arrayUnion(nextField) : FieldValue.delete()
-    }
-  });
-
-  await sendAndSaveReply({ context, incoming, reply, suffix: `ask-${nextField || "missing"}` });
-  return buildResult(context, reply, CONVERSATION_STAGES.WAITING_DISCOVERY_REPLY, { missingFields });
-}
-
-async function completeBriefAndGenerateLyrics({ context, incoming }) {
-  await setConversationStage({
-    conversationRef: context.conversationRef,
-    leadRef: context.leadRef,
-    stage: CONVERSATION_STAGES.BRIEF_COMPLETE
-  });
-
-  const lock = await lockOrderForLyrics(context.orderRef);
-  if (!lock.locked) {
-    const reply =
-      lock.reason === "lyrics-exist"
-        ? "Ya tienes la letra arriba. ¿La dejamos asi o quieres que cambie algo?"
-        : "Estoy escribiendo tu letra, dame un momento.";
-    await sendAndSaveReply({ context, incoming, reply, suffix: `lyrics-${lock.reason}` });
-    return buildResult(context, reply, context.conversation.stage, { skipped: lock.reason });
-  }
-
-  await setConversationStage({
-    conversationRef: context.conversationRef,
-    leadRef: context.leadRef,
-    stage: CONVERSATION_STAGES.GENERATING_LYRICS
-  });
-
-  try {
-    const song = buildSongForLyrics(context.order, context.lead);
-    const lyrics = await createLyrics(song);
-    const version = Number(context.order.lyricsVersion || 0) + 1;
-
-    await context.orderRef.update({
-      lyrics,
-      lyricsApproved: false,
-      lyricsVersion: version,
-      lyricVersions: FieldValue.arrayUnion({
-        version,
-        lyrics,
-        createdAt: new Date().toISOString(),
-        source: "initial"
-      }),
-      lyricsGenerationLock: FieldValue.delete(),
-      musicStatus: "lyrics_ready",
-      updatedAt: FieldValue.serverTimestamp()
-    });
-
-    await setConversationStage({
-      conversationRef: context.conversationRef,
-      leadRef: context.leadRef,
-      stage: CONVERSATION_STAGES.WAITING_LYRICS_APPROVAL
-    });
-
-    const revisionsLeft = Math.max(0, config.maxLyricsRevisions - getRevisionsUsed(context.order));
-    const reply = buildLyricsApprovalMessage(lyrics, undefined, revisionsLeft);
-    await sendAndSaveReply({ context, incoming, reply, suffix: `lyrics-v${version}` });
-    return buildResult(context, reply, CONVERSATION_STAGES.WAITING_LYRICS_APPROVAL);
-  } catch (error) {
-    await context.orderRef.update({
-      lyricsGenerationLock: FieldValue.delete(),
-      musicStatus: "lyrics_error",
-      lyricsError: error.message,
-      updatedAt: FieldValue.serverTimestamp()
-    });
-    await context.conversationRef.update({
-      lastError: error.message,
-      updatedAt: FieldValue.serverTimestamp()
-    });
-    throw error;
-  }
-}
-
-async function handleLyricsApprovalIntent({ context, incoming, extraction }) {
-  if (extraction.intent === INTENTS.APPROVE_LYRICS) {
-    await context.orderRef.update({
-      lyricsApproved: true,
-      lyricsApprovedAt: FieldValue.serverTimestamp(),
-      musicStatus: "lyrics_approved",
-      updatedAt: FieldValue.serverTimestamp()
-    });
-    await setConversationStage({
-      conversationRef: context.conversationRef,
-      leadRef: context.leadRef,
-      stage: CONVERSATION_STAGES.PRODUCING_SONG
-    });
-
-    const reply = [
-      "Perfecto, letra aprobada.",
-      "",
-      "Ya estoy produciendo la musica. En unos minutos te mando dos versiones por aqui para que elijas."
-    ].join("\n");
-    await sendAndSaveReply({ context, incoming, reply, suffix: "lyrics-approved" });
-
-    await triggerSongProduction(context);
-
-    return buildResult(context, reply, CONVERSATION_STAGES.PRODUCING_SONG);
-  }
-
-  if (extraction.intent === INTENTS.POSTPONE) {
-    return handlePostpone({ context, incoming });
-  }
-
-  if (extraction.intent === INTENTS.BUYING_SIGNAL) {
-    return handleBuyingSignal({ context, incoming });
-  }
-
-  // Con la letra en pantalla, casi todo lo que escribe el cliente es feedback
-  // sobre ella. Exigir un verbo concreto ("cambia", "ponle") hacia que el
-  // segundo ajuste, pedido con otras palabras, cayera en la respuesta generica
-  // y no cambiara nada: parecia que solo se podia corregir una vez.
-  // "¿No hay una prueba cantada?" no es una correccion: tratarla como tal
-  // reescribia la letra igual que estaba y le gastaba su unico cambio.
-  if (isPlainQuestion(incoming.text)) {
-    const reply = [
-      "La muestra cantada te llega en cuanto apruebes la letra.",
-      "",
-      "¿La dejamos asi y la produzco?"
-    ].join("\n");
-    await sendAndSaveReply({ context, incoming, reply, suffix: "pregunta-letra" });
-    return buildResult(context, reply, CONVERSATION_STAGES.WAITING_LYRICS_APPROVAL);
-  }
-
-  // Su letra es suya: si pide un cambio, lo hace el mismo mandandola de nuevo.
-  if (context.order.lyricsFromClient && isActionableFeedback(incoming.text)) {
-    const reply = [
-      "Como la letra es tuya, prefiero no cambiarte nada.",
-      "",
-      "Mandame la letra corregida y la produzco con esa, o dime si la dejamos como esta."
-    ].join("\n");
-    await sendAndSaveReply({ context, incoming, reply, suffix: "letra-propia-cambio" });
-    return buildResult(context, reply, CONVERSATION_STAGES.WAITING_LYRICS_APPROVAL);
-  }
-
-  if (isActionableFeedback(incoming.text)) {
-    if (getRevisionsUsed(context.order) >= config.maxLyricsRevisions) {
-      return handleRevisionLimitReached({ context, incoming });
-    }
-    return reviseLyricsFromConversation({ context, incoming, extraction });
-  }
-
-  const reply = "¿La letra te gusta asi o quieres que cambie alguna parte?";
-  await sendAndSaveReply({ context, incoming, reply, suffix: "lyrics-followup" });
-  return buildResult(context, reply, CONVERSATION_STAGES.WAITING_LYRICS_APPROVAL);
-}
-
-function isLyricsStage(stage) {
-  return [
-    CONVERSATION_STAGES.WAITING_LYRICS_APPROVAL,
-    CONVERSATION_STAGES.LYRICS_REVISION,
-    CONVERSATION_STAGES.GENERATING_LYRICS
-  ].includes(stage);
-}
-
-function getRevisionsUsed(order = {}) {
-  if (typeof order.lyricsRevisionCount === "number") return order.lyricsRevisionCount;
-  // Pedidos anteriores al contador: la version 1 es la letra inicial.
-  return Math.max(0, Number(order.lyricsVersion || 1) - 1);
+  return buildResult(context, reply, stage, { chosenVersion: eleccion });
 }
 
 /**
- * Agotadas las correcciones por chat no dejamos al cliente en un bucle: primero
- * se le ofrece aprobar, y si insiste pasa a un asesor y el bot deja de contestar.
+ * "Se escucha bien la version 2", "me gusta la 1", "la segunda". Registrarlo es
+ * lo que separa una muestra escuchada de una venta lista para cobrar.
  */
-async function handleRevisionLimitReached({ context, incoming }) {
-  // Pedir un cambio mas no puede dejar la conversacion parada: se explica la
-  // regla y se produce la muestra con la letra que hay. Un cliente pidio cinco
-  // versiones distintas de una muestra gratuita antes de esto.
-  const reply = [
-    "Para la muestra hacemos un solo cambio y ya lo aplicamos.",
-    "",
-    "Voy a producirla asi para que la escuches cantada. Cuando tengas tu cancion completa ajustamos la letra las veces que haga falta."
-  ].join("\n");
+function detectarVersionElegida(text = "") {
+  const normalizado = String(text).toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
 
-  await context.orderRef.update({
-    lyricsApproved: true,
-    lyricsApprovedAt: FieldValue.serverTimestamp(),
-    musicStatus: "lyrics_approved",
-    revisionLimitNotifiedAt: FieldValue.serverTimestamp(),
-    lyricsRevisionLock: FieldValue.delete(),
-    updatedAt: FieldValue.serverTimestamp()
-  });
-  context.order = { ...context.order, lyricsApproved: true };
+  if (/\b(version|opcion|pista|cancion)?\s*(numero\s*)?(1|uno|primera|primer)\b/.test(normalizado) &&
+      /\b(version|opcion|la|el)\s*(numero\s*)?(1|uno|primera|primer)\b/.test(normalizado)) {
+    return 1;
+  }
 
-  await setConversationStage({
-    conversationRef: context.conversationRef,
-    leadRef: context.leadRef,
-    stage: CONVERSATION_STAGES.PRODUCING_SONG
-  });
+  if (/\b(version|opcion|la|el)\s*(numero\s*)?(2|dos|segunda)\b/.test(normalizado)) return 2;
+  if (/\b(version|opcion|la|el)\s*(numero\s*)?(1|uno|primera|primer)\b/.test(normalizado)) return 1;
 
-  await sendAndSaveReply({ context, incoming, reply, suffix: "revision-limit" });
-  await triggerSongProduction(context);
-
-  return buildResult(context, reply, CONVERSATION_STAGES.PRODUCING_SONG);
+  return null;
 }
 
 const GREETING_ONLY = /^(hola|buenas|buenos dias|buenas tardes|buenas noches|hey|que tal|holi|ola)[\s!.,¡]*$/i;

@@ -191,7 +191,33 @@ export async function transcribeAudio(buffer, filename = "nota-de-voz.ogg") {
     language: "es"
   });
 
-  return String(response?.text || "").trim();
+  return descartarAlucinacion(String(response?.text || "").trim());
+}
+
+/**
+ * Con audio en silencio o inaudible, Whisper devuelve frases de creditos de
+ * subtitulos que aprendio de sus datos. Un cliente aparecio en el CRM diciendo
+ * "Subtitulos realizados por la comunidad de Amara.org".
+ */
+const ALUCINACIONES = [
+  /subtitulos? (realizados|creados) por/i,
+  /amara\.org/i,
+  /subtitulado por la comunidad/i,
+  /gracias por ver el video/i,
+  /suscribete al canal/i,
+  /^\s*(gracias|thank you)[.!]?\s*$/i,
+  /www\.[a-z]+\.(com|org)/i
+];
+
+function descartarAlucinacion(texto) {
+  if (!texto) return "";
+
+  if (ALUCINACIONES.some((patron) => patron.test(texto))) {
+    console.warn("[openai] transcripcion descartada por parecer alucinacion", { texto: texto.slice(0, 80) });
+    return "";
+  }
+
+  return texto;
 }
 
 const MAX_TITLE_CHARS = 80;
