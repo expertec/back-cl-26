@@ -935,7 +935,11 @@ async function touchInboundContext(context, incoming) {
       // El JID es la direccion real de respuesta; con LIDs el telefono no basta.
       ...(incoming.jid && incoming.jid !== context.lead.waJid ? { waJid: incoming.jid } : {})
     }),
-    context.conversationRef.update(updates)
+    context.conversationRef.update({
+      ...updates,
+      // Sin leer hasta que alguien del equipo abra la conversacion.
+      unreadCount: FieldValue.increment(1)
+    })
   ]);
 }
 

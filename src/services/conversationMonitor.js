@@ -103,6 +103,7 @@ function buildItem({ conversation, lead, order, music }) {
     lastBotReplyAt,
     // Ultima actividad venga de quien venga: es lo que ordena un chat.
     lastActivityAt: Math.max(lastMessageAt || 0, lastBotReplyAt || 0) || null,
+    unreadCount: Number(conversation.unreadCount || 0),
     minutesSinceMessage,
     minutesInStage,
     missingFields,
@@ -459,4 +460,28 @@ async function getSongsByLead(leadId) {
       };
     })
     .sort((a, b) => (a.createdAt || 0) - (b.createdAt || 0));
+}
+
+/**
+ * Marca la conversacion como leida. El punto de "no leido" tiene que apagarse al
+ * abrirla, como en cualquier chat: antes se mostraba la severidad del
+ * diagnostico y seguia encendida aunque ya la hubieran atendido.
+ */
+export async function markConversationRead(leadId, actor) {
+  const snap = await db
+    .collection(COLLECTIONS.conversations)
+    .where("leadId", "==", leadId)
+    .where("active", "==", true)
+    .limit(1)
+    .get();
+
+  if (snap.empty) return { updated: false };
+
+  await snap.docs[0].ref.update({
+    unreadCount: 0,
+    lastReadAt: FieldValue.serverTimestamp(),
+    lastReadBy: actor?.email || null
+  });
+
+  return { updated: true };
 }

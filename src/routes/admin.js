@@ -22,6 +22,7 @@ import {
   getConversationDetail,
   getConversationMessages,
   getConversationsHealth,
+  markConversationRead,
   setConversationMode
 } from "../services/conversationMonitor.js";
 import {
@@ -336,5 +337,13 @@ adminRouter.get("/conversations/:leadId/detalle", async (req, res) => {
     return res.json({ ok: true, ...detail });
   } catch (error) {
     return res.status(404).json({ ok: false, error: error.message });
+  }
+});
+
+adminRouter.post("/conversations/:leadId/read", async (req, res) => {
+  try {
+    return res.json({ ok: true, ...(await markConversationRead(req.params.leadId, req.adminUser)) });
+  } catch (error) {
+    return res.status(400).json({ ok: false, error: error.message });
   }
 });
