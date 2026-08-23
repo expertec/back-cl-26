@@ -19,6 +19,32 @@ function trimTitle(title) {
   return (lastSpace > 20 ? cut.slice(0, lastSpace) : cut).trim();
 }
 
+// Un mood fijo y sentimental empujaba a balada hasta cuando el cliente pedia
+// regueton o corrido: el animo tiene que salir del genero y del motivo.
+const MOODS_POR_GENERO = [
+  [/regueton|reggaeton|perreo/i, "Ritmica y bailable, con energia"],
+  [/cumbia|salsa|merengue|bachata/i, "Alegre y bailable"],
+  [/corrido|banda|norte[nñ]o|regional/i, "Con fuerza y sentimiento, al estilo regional"],
+  [/rock|punk|metal/i, "Con energia y guitarras"],
+  [/rap|hip hop|trap/i, "Con flow y actitud"],
+  [/balada|romantic/i, "Emotiva, clara y cercana"]
+];
+
+const MOODS_POR_MOTIVO = [
+  [/cumplea|felicitaci/i, "Festiva y alegre"],
+  [/memorial|despedida|luto/i, "Serena y emotiva"],
+  [/motivaci|superaci|logro|reconocim/i, "Inspiradora y con impulso"]
+];
+
+function buildMood(order) {
+  const genero = `${order.genre || ""} ${order.referenceArtist || ""}`;
+  const porGenero = MOODS_POR_GENERO.find(([patron]) => patron.test(genero))?.[1];
+  if (porGenero) return porGenero;
+
+  const porMotivo = MOODS_POR_MOTIVO.find(([patron]) => patron.test(order.purpose || ""))?.[1];
+  return porMotivo || "Emotiva, clara y cercana";
+}
+
 export function buildSongForLyrics(order, lead = {}) {
   const recipientName = order.nickname || order.recipient || "destinatario";
   const storyParts = [
@@ -34,10 +60,12 @@ export function buildSongForLyrics(order, lead = {}) {
     customerName: order.clientName || lead.name || "cliente",
     language: "Espanol",
     story: storyParts.join("\n"),
-    genre: order.genre || (order.referenceArtist ? `estilo inspirado en ${order.referenceArtist}` : "balada pop"),
+    // Sin genero no se inventa uno: poner "balada pop" por defecto convertia en
+    // balada los pedidos donde el genero no se llego a guardar.
+    genre: order.genre || (order.referenceArtist ? `estilo de ${order.referenceArtist}` : ""),
     referenceArtist: order.referenceArtist || "",
     voiceType: order.voiceType || "Cualquiera",
-    mood: "Emotiva, clara y cercana",
+    mood: buildMood(order),
     negativeTags: "Heavy metal, gritos, audio distorsionado"
   };
 }

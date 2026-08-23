@@ -306,6 +306,8 @@ export async function getConversationMessages(leadId, { limit = 80 } = {}) {
         replyToId: data.replyToId || null,
         replyToText: data.replyToText || "",
         replyToDirection: data.replyToDirection || null,
+        mediaUrl: data.mediaUrl || null,
+        mediaType: data.mediaType || null,
         createdAt: data.createdAt?.toDate?.()?.getTime?.() || null
       };
     })

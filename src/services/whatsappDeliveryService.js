@@ -2,6 +2,7 @@ import { config } from "../config.js";
 import { sendSongWithKanwap } from "./kanwapService.js";
 import { sendSongWithVevWhatsapp } from "./vevWhatsappService.js";
 import { sendAudio, sendText } from "./whatsapp/index.js";
+import { logOutboundMedia } from "./conversationLog.js";
 
 export async function sendSongWithWhatsapp(song) {
   if (config.whatsappProvider === "baileys") {
@@ -38,6 +39,13 @@ async function sendSongWithBaileys(song) {
     idempotencyKey: `${song.id}-lyrics`
   });
 
+  await logOutboundMedia({
+    conversationId: song.conversationId,
+    text: lyricsMessage,
+    mediaType: "text",
+    meta: { musicId: song.id }
+  });
+
   await sendText({
     phone: song.leadPhone,
     message: intro,
@@ -59,6 +67,13 @@ async function sendSongWithBaileys(song) {
       phone: song.leadPhone,
       audioUrl: clipUrl,
       idempotencyKey: `${song.id}-clip-${index + 1}`
+    });
+
+    await logOutboundMedia({
+      conversationId: song.conversationId,
+      text: `Muestra ${index + 1} de "${song.title || "tu cancion"}"`,
+      mediaUrl: clipUrl,
+      meta: { musicId: song.id, sample: index + 1 }
     });
 
     audioResults.push(audioResult);

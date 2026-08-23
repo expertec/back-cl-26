@@ -108,6 +108,8 @@ Referencia:
 - Evitar: ${song.negativeTags || "nada especifico"}
 
 Restricciones:
+- Empieza el prompt con el genero, tal cual esta escrito arriba.
+- Respeta ese genero: no lo cambies ni lo suavices hacia balada.
 - No menciones nombres de artistas ni marcas.
 - Maximo 120 caracteres.
 - Usa elementos musicales: ritmo, instrumentos, energia, genero y tipo de voz.
@@ -130,8 +132,29 @@ Restricciones:
 
   let stylePrompt = response.choices[0]?.message?.content?.trim();
   if (!stylePrompt) throw new Error("OpenAI no devolvio prompt musical.");
+
+  stylePrompt = ensureGenre(stylePrompt, song.genre);
   if (stylePrompt.length > 120) stylePrompt = `${stylePrompt.slice(0, 117)}...`;
   return stylePrompt;
+}
+
+/**
+ * El modelo a veces devuelve un prompt bonito que ya no dice el genero, y Suno
+ * termina componiendo otra cosa: alguien pedia regueton y recibia balada. Si el
+ * genero no aparece, se antepone.
+ */
+function ensureGenre(stylePrompt, genre) {
+  const genero = String(genre || "").trim();
+  if (!genero) return stylePrompt;
+
+  const normalizar = (value) =>
+    String(value).toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+
+  const palabras = normalizar(genero).split(/\s+/).filter((palabra) => palabra.length > 3);
+  const prompt = normalizar(stylePrompt);
+  const yaEsta = palabras.length ? palabras.some((palabra) => prompt.includes(palabra)) : prompt.includes(normalizar(genero));
+
+  return yaEsta ? stylePrompt : `${genero}, ${stylePrompt}`;
 }
 
 export async function createJsonChatCompletion({ system, user, temperature = 0.2, maxTokens = 400 }) {

@@ -3,6 +3,7 @@ import { logEvent } from "./eventLog.js";
 import { COLLECTIONS, CONVERSATION_STAGES } from "./songConversation/constants.js";
 import { setConversationStage } from "./songConversation/conversationState.js";
 import { sendAudio, sendDocument, sendText } from "./whatsapp/index.js";
+import { logOutboundMedia } from "./conversationLog.js";
 
 const MUSIC_COLLECTION = "musica";
 
@@ -52,6 +53,13 @@ export async function deliverFullSong({ musicId, version = 1, actor }) {
     filename: `${sanitizeFilename(titulo)}.mp3`,
     mimetype: "audio/mpeg",
     caption: "Tu cancion para descargar y compartir"
+  });
+
+  await logOutboundMedia({
+    conversationId: song.conversationId,
+    text: `Cancion completa entregada: "${titulo}" (version ${chosen.version})`,
+    mediaUrl: chosen.fullUrl,
+    meta: { musicId, fullVersion: chosen.version }
   });
 
   await ref.update({
