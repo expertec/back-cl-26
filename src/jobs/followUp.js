@@ -5,13 +5,14 @@ import { COLLECTIONS, CONVERSATION_STAGES } from "../services/songConversation/c
 import { sendText } from "../services/whatsapp/index.js";
 
 /**
- * El momento de mayor intencion de compra es justo despues de escuchar la
- * muestra, y hasta ahora nadie decia nada: la conversacion terminaba con los
- * audios y ahi moria la venta.
+ * Recordatorios a quien ya escucho su muestra y no ha comprado. El momento de
+ * mayor intencion es justo despues de escucharla, y despues se enfria: sin esto
+ * la conversacion terminaba con los audios y ahi moria la venta.
  */
-export async function sendPendingFollowUps(limit = 20) {
+export async function sendPendingFollowUps(limit = 30) {
   const settings = await getBotSettings();
-  if (!settings.followUpEnabled && !settings.secondFollowUpEnabled) return 0;
+  const pasos = (settings.followUps || []).filter((paso) => paso.enabled && paso.message);
+  if (!pasos.length) return 0;
 
   const snap = await db
     .collection(COLLECTIONS.conversations)
@@ -22,29 +23,20 @@ export async function sendPendingFollowUps(limit = 20) {
 
   if (snap.empty) return 0;
 
-  let sent = 0;
+  let enviados = 0;
 
   for (const doc of snap.docs) {
     const conversation = doc.data();
-    const step = pickStep(conversation, settings);
-    if (!step) continue;
 
     try {
       const lead = await getLead(conversation.leadId);
       if (!lead) continue;
-      // A quien ya esta atendiendo una persona no le escribe el bot encima.
-      if ((conversation.mode || lead.mode) === "human") continue;
+      if (await yaCompro(conversation.leadId)) continue;
 
-      // Ni a quien escribio y sigue esperando: recibir "¿que tal quedo tu
-      // cancion?" cuando llevas dos mensajes sin respuesta es peor que nada.
-      const ultimoDelCliente = toMillis(lead.lastMessageAt);
-      const ultimaRespuesta = toMillis(conversation.lastBotReplyAt);
-      if (ultimoDelCliente && ultimoDelCliente > ultimaRespuesta) {
-        console.log("[seguimiento] omitido: el cliente espera respuesta", { phone: lead.phone });
-        continue;
-      }
+      const paso = elegirPaso({ conversation, lead, pasos, settings });
+      if (!paso) continue;
 
-      const message = renderTemplate(step.message, {
+      const message = renderTemplate(paso.message, {
         nombre: firstName(lead.name),
         telefono: lead.phone || ""
       }).trim();
@@ -54,11 +46,12 @@ export async function sendPendingFollowUps(limit = 20) {
       await sendText({
         phone: lead.waJid || lead.phone,
         message,
-        idempotencyKey: `${doc.id}-${step.field}`
+        idempotencyKey: `${doc.id}-followup-${paso.indice}`
       });
 
       await doc.ref.update({
-        [step.field]: FieldValue.serverTimestamp(),
+        followUpStep: paso.indice + 1,
+        lastFollowUpAt: FieldValue.serverTimestamp(),
         lastBotReply: message,
         lastBotReplyAt: FieldValue.serverTimestamp(),
         updatedAt: FieldValue.serverTimestamp()
@@ -67,54 +60,76 @@ export async function sendPendingFollowUps(limit = 20) {
       await doc.ref.collection("messages").add({
         direction: "out",
         text: message,
-        followUp: step.field,
+        followUp: `paso-${paso.indice + 1}`,
         createdAt: FieldValue.serverTimestamp()
       });
 
       logEvent({
         level: "info",
         scope: "seguimiento",
-        message: `Seguimiento enviado (${step.field})`,
+        message: `Recordatorio ${paso.indice + 1} enviado`,
         leadId: conversation.leadId,
         phone: lead.phone
       });
 
-      sent += 1;
+      enviados += 1;
     } catch (error) {
       console.error("[seguimiento] fallo el envio", { conversationId: doc.id, error: error.message });
       logEvent({
         level: "error",
         scope: "seguimiento",
-        message: "No se pudo enviar el seguimiento",
+        message: "No se pudo enviar el recordatorio",
         leadId: conversation.leadId,
         detail: error.message
       });
     }
   }
 
-  return sent;
+  return enviados;
 }
 
-function pickStep(conversation, settings) {
-  const samplesAt = toMillis(conversation.stageUpdatedAt);
-  if (!samplesAt) return null;
+function elegirPaso({ conversation, lead, pasos, settings }) {
+  const desde = toMillis(conversation.stageUpdatedAt);
+  if (!desde) return null;
 
-  const minutes = (Date.now() - samplesAt) / 60000;
+  const enviados = Number(conversation.followUpStep || 0);
+  if (enviados >= pasos.length) return null;
 
-  if (settings.followUpEnabled && !conversation.followUpSentAt && minutes >= settings.followUpDelayMinutes) {
-    return { field: "followUpSentAt", message: settings.followUpMessage };
+  // Al cliente que acaba de escribir se le contesta, no se le manda una
+  // plantilla: recibir "¿que tal quedo tu cancion?" cuando llevas dos mensajes
+  // sin respuesta es peor que no recibir nada.
+  const ultimoDelCliente = toMillis(lead.lastMessageAt);
+  const ultimaRespuesta = toMillis(conversation.lastBotReplyAt);
+  if (ultimoDelCliente && ultimoDelCliente > ultimaRespuesta) return null;
+
+  // Con una persona atendiendo, el bot espera: no le escribe encima a un asesor
+  // que esta negociando, pero tampoco abandona al que nadie atendio.
+  const enManosHumanas = (conversation.mode || lead.mode) === "human";
+  if (enManosHumanas) {
+    const gracia = Number(settings.humanTakeoverGraceHours || 6) * 60 * 60 * 1000;
+    const desdeUltimaActividad = Date.now() - Math.max(ultimaRespuesta, ultimoDelCliente);
+    if (desdeUltimaActividad < gracia) return null;
   }
 
-  if (
-    settings.secondFollowUpEnabled &&
-    conversation.followUpSentAt &&
-    !conversation.secondFollowUpSentAt &&
-    minutes >= settings.secondFollowUpDelayMinutes
-  ) {
-    return { field: "secondFollowUpSentAt", message: settings.secondFollowUpMessage };
-  }
+  const minutos = (Date.now() - desde) / 60000;
+  const paso = pasos[enviados];
 
-  return null;
+  return minutos >= paso.delayMinutes ? { ...paso, indice: enviados } : null;
+}
+
+/**
+ * Quien ya pago no recibe recordatorios de venta: es la forma mas rapida de
+ * arruinar una compra que ya salio bien.
+ */
+async function yaCompro(leadId) {
+  const snap = await db
+    .collection("musica")
+    .where("leadId", "==", leadId)
+    .where("paid", "==", true)
+    .limit(1)
+    .get();
+
+  return !snap.empty;
 }
 
 async function getLead(leadId) {
