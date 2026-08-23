@@ -348,6 +348,14 @@ async function handOverToSales({ context, incoming }) {
 
 async function handlePostApprovalMessage({ context, incoming }) {
   const stage = context.conversation.stage;
+
+  // Ya escucho su cancion: preguntas de precio, quejas del genero o cualquier
+  // comentario con contenido son trabajo de una persona. Antes se contestaba
+  // "te paso con el equipo" sin pasar a nadie, y el lead se quedaba en el bot.
+  if (stage === CONVERSATION_STAGES.SAMPLES_SENT && isActionableFeedback(incoming.text)) {
+    return handOverToSales({ context, incoming });
+  }
+
   const reply =
     stage === CONVERSATION_STAGES.SAMPLES_SENT
       ? "Ya te envie las versiones con marca de agua. Si quieres la cancion completa en alta calidad, te paso con el equipo."
@@ -496,6 +504,18 @@ async function handleLyricsApprovalIntent({ context, incoming, extraction }) {
   // sobre ella. Exigir un verbo concreto ("cambia", "ponle") hacia que el
   // segundo ajuste, pedido con otras palabras, cayera en la respuesta generica
   // y no cambiara nada: parecia que solo se podia corregir una vez.
+  // "¿No hay una prueba cantada?" no es una correccion: tratarla como tal
+  // reescribia la letra igual que estaba y le gastaba su unico cambio.
+  if (isPlainQuestion(incoming.text)) {
+    const reply = [
+      "La muestra cantada te llega en cuanto apruebes la letra.",
+      "",
+      "¿La dejamos asi y la produzco?"
+    ].join("\n");
+    await sendAndSaveReply({ context, incoming, reply, suffix: "pregunta-letra" });
+    return buildResult(context, reply, CONVERSATION_STAGES.WAITING_LYRICS_APPROVAL);
+  }
+
   if (isActionableFeedback(incoming.text)) {
     if (getRevisionsUsed(context.order) >= config.maxLyricsRevisions) {
       return handleRevisionLimitReached({ context, incoming });
@@ -559,6 +579,32 @@ async function handleRevisionLimitReached({ context, incoming }) {
 }
 
 const GREETING_ONLY = /^(hola|buenas|buenos dias|buenas tardes|buenas noches|hey|que tal|holi|ola)[\s!.,¡]*$/i;
+
+// Raices, no palabras exactas: "cambiar", "cambies" y "cambiale" son lo mismo
+// que "cambia" y antes se colaban como si fueran preguntas.
+const CAMBIO_EXPLICITO =
+  /\b(cambi\w*|corrig\w*|modific\w*|quit\w*|agreg\w*|ponle|poner|incluy\w*|mencion\w*|donde dice|en vez de|que diga)\b/i;
+
+/**
+ * Pregunta sin instruccion de cambio: se responde, no se reescribe la letra.
+ */
+function isPlainQuestion(text = "") {
+  const raw = String(text).trim();
+  if (!raw || raw.length > 160) return false;
+  if (CAMBIO_EXPLICITO.test(raw)) return false;
+
+  const normalized = raw.normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+  const tieneSigno = /[?¿]/.test(raw);
+  // La duda no siempre va al principio: "Pero no hay una prueba cantada..."
+  const formulaDeDuda =
+    /\b(no hay|hay forma|se puede|habra|por que|porque no|me lees|sigues ahi|cuanto cuesta|que precio)\b/i.test(
+      normalized
+    );
+  const arrancaPregunta =
+    /^(hay|puedo|puedes|como|cuando|cuanto|donde|que tal|y si|quien)\b/i.test(normalized);
+
+  return tieneSigno || formulaDeDuda || arrancaPregunta;
+}
 
 function isActionableFeedback(text = "") {
   const raw = String(text).trim();
@@ -685,7 +731,11 @@ async function getOrCreateConversationContext(incoming) {
   if (conversationSnap.empty) {
     orderRef = db.collection(COLLECTIONS.songOrders).doc();
     conversationRef = db.collection(COLLECTIONS.conversations).doc();
-    order = buildEmptyOrder({ leadId: leadRef.id, phone });
+    order = buildEmptyOrder({
+      leadId: leadRef.id,
+      phone,
+      clientName: nombreDePerfil(incoming.contactName || lead.name)
+    });
     conversation = {
       leadId: leadRef.id,
       songOrderId: orderRef.id,
@@ -713,10 +763,24 @@ async function getOrCreateConversationContext(incoming) {
   return { leadRef, lead: materializeLead(lead), conversationRef, conversation, orderRef, order };
 }
 
-function buildEmptyOrder({ leadId, phone }) {
+/**
+ * El nombre del perfil de WhatsApp sirve como nombre del cliente. Sin esto el
+ * bot preguntaba "¿cual es tu nombre?" y el cliente, que venia hablando de su
+ * hija, respondia el nombre de ella: el pedido quedaba a nombre de la niña.
+ */
+function nombreDePerfil(nombre) {
+  const limpio = String(nombre || "").trim();
+  if (limpio.length < 3 || limpio.length > 60) return "";
+  // Un usuario tipo "qfbcastro" o un telefono no son un nombre utilizable.
+  if (/^\d+$/.test(limpio) || !/[a-záéíóúñ]/i.test(limpio)) return "";
+  return limpio;
+}
+
+function buildEmptyOrder({ leadId, phone, clientName = "" }) {
   return {
     leadId,
     phone,
+    clientName,
     purpose: "",
     recipient: "",
     relationship: "",
@@ -726,7 +790,6 @@ function buildEmptyOrder({ leadId, phone }) {
     nickname: "",
     story: "",
     specialDetails: "",
-    clientName: "",
     lyrics: "",
     lyricsApproved: false,
     lyricsVersion: 0,

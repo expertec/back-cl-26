@@ -94,12 +94,18 @@ function normalizeExtraction(result, messageText, stage) {
   const modelIntent = normalizeIntent(result?.intent);
   // Un "ok" o un 👍 pesan mas que lo que el modelo haya decidido: si el cliente
   // aprobo y no lo detectamos, la conversacion se queda esperando para siempre.
-  const intent =
-    heuristic.intent === INTENTS.APPROVE_LYRICS
-      ? INTENTS.APPROVE_LYRICS
-      : modelIntent === INTENTS.UNKNOWN
-        ? heuristic.intent
-        : modelIntent;
+  // El modelo clasificaba "Precio?" como pregunta y eso pisaba la lectura de
+  // compra: el cliente lo pidio tres veces y nadie lo atendio.
+  const heuristicaManda =
+    heuristic.intent === INTENTS.APPROVE_LYRICS ||
+    (heuristic.intent === INTENTS.BUYING_SIGNAL &&
+      [INTENTS.QUESTION, INTENTS.UNKNOWN, INTENTS.PROVIDE_INFORMATION].includes(modelIntent));
+
+  const intent = heuristicaManda
+    ? heuristic.intent
+    : modelIntent === INTENTS.UNKNOWN
+      ? heuristic.intent
+      : modelIntent;
 
   return {
     ...EMPTY_RESULT,
