@@ -17,6 +17,8 @@ export const config = {
     .concat([
       "http://localhost:3000",
       "http://localhost:3001",
+      "https://cantalab.app",
+      "https://www.cantalab.app",
       "https://cantalab2026.vercel.app"
     ]),
   openaiApiKey: process.env.OPENAI_API_KEY || "",

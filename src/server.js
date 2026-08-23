@@ -14,13 +14,15 @@ const app = express();
 // Los previews de Vercel cambian de subdominio en cada despliegue, asi que se
 // reconocen por patron en vez de tener que listarlos uno por uno.
 const VERCEL_PREVIEW = /^https:\/\/cantalab2026(-[a-z0-9-]+)?\.vercel\.app$/;
+// Cualquier subdominio propio: crm.cantalab.app, panel.cantalab.app, etc.
+const DOMINIO_PROPIO = /^https:\/\/([a-z0-9-]+\.)*cantalab\.app$/;
 
 function isAllowedOrigin(origin) {
   // Sin origen son llamadas server a server (Suno, curl, crons): no son CORS.
   if (!origin) return true;
   if (config.frontendOrigins.includes("*")) return true;
   if (config.frontendOrigins.includes(origin.replace(/\/$/, ""))) return true;
-  return VERCEL_PREVIEW.test(origin);
+  return VERCEL_PREVIEW.test(origin) || DOMINIO_PROPIO.test(origin);
 }
 
 app.use(
