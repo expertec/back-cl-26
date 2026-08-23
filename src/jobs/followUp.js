@@ -35,6 +35,15 @@ export async function sendPendingFollowUps(limit = 20) {
       // A quien ya esta atendiendo una persona no le escribe el bot encima.
       if ((conversation.mode || lead.mode) === "human") continue;
 
+      // Ni a quien escribio y sigue esperando: recibir "¿que tal quedo tu
+      // cancion?" cuando llevas dos mensajes sin respuesta es peor que nada.
+      const ultimoDelCliente = toMillis(lead.lastMessageAt);
+      const ultimaRespuesta = toMillis(conversation.lastBotReplyAt);
+      if (ultimoDelCliente && ultimoDelCliente > ultimaRespuesta) {
+        console.log("[seguimiento] omitido: el cliente espera respuesta", { phone: lead.phone });
+        continue;
+      }
+
       const message = renderTemplate(step.message, {
         nombre: firstName(lead.name),
         telefono: lead.phone || ""

@@ -3,6 +3,7 @@ import { config } from "../../config.js";
 import { db, FieldValue } from "../../firebase.js";
 import { normalizePhone } from "../../schemas.js";
 import { createLyrics, reviseLyrics } from "../openaiService.js";
+import { getBotSettings, renderTemplate } from "../botSettings.js";
 import { logEvent } from "../eventLog.js";
 import { startSongProduction } from "../songProduction.js";
 import { sendText } from "../whatsapp/index.js";
@@ -331,7 +332,18 @@ async function handOverToSales({ context, incoming }) {
     context.conversationRef.update({ mode: "human", updatedAt: FieldValue.serverTimestamp() })
   ]);
 
-  const reply = "Con gusto. Te paso con una persona del equipo para darte precios y la version completa.";
+  // Quien pregunta el precio quiere el precio, no que le prometan que alguien
+  // se lo dira: se responde con la informacion configurada y ademas pasa a una
+  // persona para cerrar.
+  const settings = await getBotSettings();
+  const reply =
+    settings.priceMessageEnabled && settings.priceMessage
+      ? renderTemplate(settings.priceMessage, {
+          nombre: String(context.lead.name || "").trim().split(/\s+/)[0],
+          telefono: context.lead.phone || ""
+        }).trim()
+      : "Con gusto. Te paso con una persona del equipo para darte precios y la version completa.";
+
   await sendAndSaveReply({ context, incoming, reply, suffix: "sales-ready" });
 
   logEvent({
@@ -390,6 +402,7 @@ async function continueDiscovery({ context, incoming, missingFields }) {
     stage: CONVERSATION_STAGES.WAITING_DISCOVERY_REPLY,
     extra: {
       missingFields,
+      lastQuestionField: nextField || FieldValue.delete(),
       lastAskedFields: nextField ? FieldValue.arrayUnion(nextField) : FieldValue.delete()
     }
   });

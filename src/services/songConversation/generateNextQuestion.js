@@ -20,9 +20,25 @@ const FALLBACK_QUESTIONS = {
   clientName: "¿Cual es tu nombre para guardar el pedido?"
 };
 
+const REPREGUNTAS = {
+  purpose: "¿Que celebramos con esta cancion? Un cumpleanos, un aniversario, un homenaje...",
+  recipient: "Para poder escribirla necesito saber para quien es. ¿Me dices su nombre?",
+  story: "Cuentame algo de ustedes dos que quieras que aparezca en la letra.",
+  genre: "¿Que estilo le va mejor? Regional, balada, cumbia, regueton...",
+  voiceType: "Una ultima cosa: ¿la canta un hombre o una mujer?",
+  clientName: "¿A nombre de quien dejo el pedido?"
+};
+
 export async function generateNextQuestion({ missingFields, order, conversation }) {
   const nextField = selectNextField(missingFields, conversation.lastAskedFields || []);
   if (!nextField) return "";
+
+  // Si ya se pregunto por este campo y el cliente contesto otra cosa, repetir la
+  // misma pregunta con otras palabras suena a bucle: se usa una formulacion
+  // distinta y mas directa.
+  if (conversation.lastQuestionField === nextField) {
+    return REPREGUNTAS[nextField] || `Me falta ${getFieldLabel(nextField)}. ¿Me lo compartes?`;
+  }
 
   try {
     const result = await createJsonChatCompletion({

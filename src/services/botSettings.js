@@ -16,6 +16,19 @@ export const DEFAULT_SETTINGS = {
   ].join("\n"),
   secondFollowUpEnabled: false,
   secondFollowUpDelayMinutes: 1440,
+  priceMessageEnabled: true,
+  priceMessage: [
+    "La version completa de tu cancion cuesta $___.",
+    "",
+    "Te llega sin marca de agua, en alta calidad y lista para compartir o regalar.",
+    "",
+    "Para apartarla:",
+    "Banco: ___",
+    "CLABE: ___",
+    "A nombre de: ___",
+    "",
+    "Cuando hagas la transferencia mandame el comprobante por aqui y te la envio enseguida."
+  ].join("\n"),
   secondFollowUpMessage: [
     "Hola {{nombre}}, te dejo por aqui tu cancion por si quieres escucharla de nuevo.",
     "",
@@ -47,6 +60,8 @@ export async function updateBotSettings(patch = {}) {
   if (typeof patch.followUpEnabled === "boolean") clean.followUpEnabled = patch.followUpEnabled;
   if (typeof patch.secondFollowUpEnabled === "boolean") clean.secondFollowUpEnabled = patch.secondFollowUpEnabled;
   if (typeof patch.followUpMessage === "string") clean.followUpMessage = patch.followUpMessage.trim().slice(0, 2000);
+  if (typeof patch.priceMessageEnabled === "boolean") clean.priceMessageEnabled = patch.priceMessageEnabled;
+  if (typeof patch.priceMessage === "string") clean.priceMessage = patch.priceMessage.trim().slice(0, 2000);
   if (typeof patch.secondFollowUpMessage === "string") {
     clean.secondFollowUpMessage = patch.secondFollowUpMessage.trim().slice(0, 2000);
   }
