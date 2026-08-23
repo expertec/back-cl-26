@@ -428,6 +428,7 @@ export async function getConversationDetail(leadId) {
       lyricsApproved: Boolean(order.lyricsApproved),
       lyricsVersion: Number(order.lyricsVersion || 0),
       lyricsRevisionCount: Number(order.lyricsRevisionCount || 0),
+      lyricsFromClient: Boolean(order.lyricsFromClient),
       musicId: order.musicId || null,
       musicStatus: order.musicStatus || "",
       missingFields: getMissingFields(order)

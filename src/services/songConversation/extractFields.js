@@ -22,12 +22,13 @@ export async function extractFields({ messageText, order, conversation, recentMe
         "Extrae datos aunque esten implicitos. Si hay artista de referencia, infiere genero cuando sea razonable.",
         "No inventes nombres, relaciones ni historias si no estan en el mensaje o contexto.",
         "Usa postpone cuando el cliente pide dejarlo para despues, no cuando pide un cambio.",
-        "Usa new_song cuando ya recibio su cancion y quiere encargar otra distinta."
+        "Usa new_song cuando ya recibio su cancion y quiere encargar otra distinta.",
+        "Usa own_lyrics cuando el mensaje es una letra escrita por el cliente que quiere que se cante tal cual."
       ].join(" "),
       user: {
         schema: {
           intent:
-            "provide_information | approve_lyrics | request_lyrics_change | question | buying_signal | postpone | new_song | unknown",
+            "provide_information | approve_lyrics | request_lyrics_change | question | buying_signal | postpone | new_song | own_lyrics | unknown",
           extractedFields: {
             purpose: "string",
             recipient: "string",
@@ -248,6 +249,36 @@ function isShortApproval(text = "") {
   return words.every((word) => APPROVAL_WORDS.has(word));
 }
 
+const LETRA_EXPLICITA =
+  /\b(esta es (mi|la) letra|mi propia letra|con esta letra|usa esta letra|ya tengo la letra|te paso la letra|la letra es esta|quiero esta letra|letra que escribi)\b/i;
+
+const MARCADOR_DE_SECCION = /^\s*[*_]{0,2}\s*(coro|estribillo|verso|puente|bridge|intro|outro|pre-?coro)\b/i;
+
+/**
+ * Distingue una letra de una historia. La diferencia esta en la forma: una letra
+ * viene en muchos renglones cortos, y a menudo con sus secciones marcadas. Un
+ * relato viene en parrafos largos. Confundirlas hacia que el bot escribiera otra
+ * letra encima de la que el cliente acababa de mandar.
+ */
+function looksLikeLyrics(text = "") {
+  const raw = String(text).trim();
+  if (raw.length < 80) return false;
+
+  const lineas = raw.split("\n").map((linea) => linea.trim()).filter(Boolean);
+
+  // Decirlo cuenta como decirlo, aunque venga todo en un renglon.
+  if (LETRA_EXPLICITA.test(raw)) return true;
+
+  // Un "Coro" o un "Verso 1" es inequivoco, y una letra corta igual los trae.
+  if (lineas.length >= 3 && lineas.some((linea) => MARCADOR_DE_SECCION.test(linea))) return true;
+
+  // Sin marcadores hace falta mas evidencia: varios renglones y todos cortos.
+  if (lineas.length < 6) return false;
+
+  const cortas = lineas.filter((linea) => linea.length <= 70).length;
+  return cortas / lineas.length >= 0.85;
+}
+
 // Quien ya tiene su cancion y pide "otra": es una venta nueva, no un cambio.
 const NEW_SONG_REGEX =
   /\b(otra cancion|otra canción|una segunda cancion|segunda cancion|dos canciones|otra mas|otra más|quiero otra|hacer otra|una nueva cancion|nueva canción|ahora (una|otra) para)\b/i;
@@ -315,6 +346,11 @@ function heuristicExtraction(text = "", stage = "") {
   const lower = text.toLowerCase();
   const extractedFields = {};
   let intent = INTENTS.PROVIDE_INFORMATION;
+
+  // Antes que nada: si el mensaje es una letra, no es historia ni correccion.
+  if (looksLikeLyrics(text)) {
+    return { ...EMPTY_RESULT, intent: INTENTS.OWN_LYRICS, confidence: 0.7 };
+  }
 
   if (NEW_SONG_REGEX.test(text)) {
     return { ...EMPTY_RESULT, intent: INTENTS.NEW_SONG, confidence: 0.6 };

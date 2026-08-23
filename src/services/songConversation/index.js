@@ -191,6 +191,10 @@ async function handleAiConversation({ context, incoming }) {
     return handleLyricsApprovalIntent({ context, incoming, extraction });
   }
 
+  if (extraction.intent === INTENTS.OWN_LYRICS && !yaTieneCancion(context)) {
+    return handleOwnLyrics({ context, incoming });
+  }
+
   if (extraction.intent === INTENTS.NEW_SONG && yaTieneCancion(context)) {
     return handleNewSongRequest({ context, incoming });
   }
@@ -231,6 +235,65 @@ async function handleAiConversation({ context, incoming }) {
  * se acusa recibo y se anota para no perderlo. Se queda en la misma etapa, asi
  * que retoma justo donde iba cuando vuelva a escribir.
  */
+/**
+ * El cliente manda su propia letra. Se guarda tal cual, sin reescribirla ni
+ * corregirle nada, y solo se le pregunta como quiere que suene.
+ */
+async function handleOwnLyrics({ context, incoming }) {
+  const letra = incoming.text.trim();
+
+  await context.orderRef.update({
+    lyrics: letra,
+    lyricsFromClient: true,
+    lyricsApproved: false,
+    lyricsVersion: Number(context.order.lyricsVersion || 0) + 1,
+    musicStatus: "lyrics_ready",
+    updatedAt: FieldValue.serverTimestamp()
+  });
+
+  context.order = {
+    ...context.order,
+    lyrics: letra,
+    lyricsFromClient: true
+  };
+
+  const faltantes = getMissingFields(context.order);
+
+  if (!faltantes.length) {
+    await setConversationStage({
+      conversationRef: context.conversationRef,
+      leadRef: context.leadRef,
+      stage: CONVERSATION_STAGES.WAITING_LYRICS_APPROVAL
+    });
+
+    const reply = "Perfecto, me quedo con tu letra tal cual. ¿La produzco asi y te la mando cantada?";
+    await sendAndSaveReply({ context, incoming, reply, suffix: "letra-propia" });
+    return buildResult(context, reply, CONVERSATION_STAGES.WAITING_LYRICS_APPROVAL);
+  }
+
+  const nextField = selectNextField(faltantes, context.conversation.lastAskedFields || []);
+  const pregunta = await generateNextQuestion({
+    missingFields: faltantes,
+    order: context.order,
+    conversation: context.conversation
+  });
+
+  await setConversationStage({
+    conversationRef: context.conversationRef,
+    leadRef: context.leadRef,
+    stage: CONVERSATION_STAGES.WAITING_DISCOVERY_REPLY,
+    extra: {
+      missingFields: faltantes,
+      lastQuestionField: nextField || FieldValue.delete(),
+      lastAskedFields: nextField ? FieldValue.arrayUnion(nextField) : FieldValue.delete()
+    }
+  });
+
+  const reply = ["Recibi tu letra, la usamos tal cual.", "", pregunta].join("\n");
+  await sendAndSaveReply({ context, incoming, reply, suffix: "letra-propia-falta" });
+  return buildResult(context, reply, CONVERSATION_STAGES.WAITING_DISCOVERY_REPLY, { missingFields: faltantes });
+}
+
 function yaTieneCancion(context) {
   return Boolean(context.order.clipUrls?.length) || context.conversation.stage === CONVERSATION_STAGES.SAMPLES_SENT;
 }
@@ -526,6 +589,17 @@ async function handleLyricsApprovalIntent({ context, incoming, extraction }) {
       "¿La dejamos asi y la produzco?"
     ].join("\n");
     await sendAndSaveReply({ context, incoming, reply, suffix: "pregunta-letra" });
+    return buildResult(context, reply, CONVERSATION_STAGES.WAITING_LYRICS_APPROVAL);
+  }
+
+  // Su letra es suya: si pide un cambio, lo hace el mismo mandandola de nuevo.
+  if (context.order.lyricsFromClient && isActionableFeedback(incoming.text)) {
+    const reply = [
+      "Como la letra es tuya, prefiero no cambiarte nada.",
+      "",
+      "Mandame la letra corregida y la produzco con esa, o dime si la dejamos como esta."
+    ].join("\n");
+    await sendAndSaveReply({ context, incoming, reply, suffix: "letra-propia-cambio" });
     return buildResult(context, reply, CONVERSATION_STAGES.WAITING_LYRICS_APPROVAL);
   }
 

@@ -9,6 +9,15 @@ const FIELD_LABELS = {
 };
 
 export function getMissingFields(order = {}) {
+  // Si la letra la escribio el cliente no hay que preguntarle la ocasion, para
+  // quien es ni que recuerdos incluir: eso ya lo resolvio el en su letra. Para
+  // producirla solo falta como debe sonar.
+  if (order.lyricsFromClient) {
+    const missing = ["voiceType", "clientName"].filter((field) => !hasValue(order[field]));
+    if (!hasValue(order.genre) && !hasValue(order.referenceArtist)) missing.push("genre");
+    return missing;
+  }
+
   const missing = REQUIRED_BRIEF_FIELDS.filter((field) => !hasValue(order[field]));
 
   if (!hasValue(order.genre) && !hasValue(order.referenceArtist)) {
