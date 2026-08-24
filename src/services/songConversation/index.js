@@ -990,6 +990,225 @@ function buildApprovalClosing(revisionsLeft) {
   return `Para la muestra puedo hacerle hasta ${revisionsLeft} cambios. ¿La dejamos asi o quieres ajustar algo?`;
 }
 
+async function continueDiscovery({ context, incoming, missingFields }) {
+  const nextField = selectNextField(missingFields, context.conversation.lastAskedFields || []);
+  const question = await generateNextQuestion({
+    missingFields,
+    order: context.order,
+    conversation: context.conversation
+  });
+
+  // El lead llega de una campana con un mensaje predefinido: hay que presentarse
+  // antes de empezar a preguntar.
+  const isFirstContact = context.conversation.stage === CONVERSATION_STAGES.NEW_LEAD;
+  const reply = isFirstContact ? [WELCOME_MESSAGE, "", question].join("\n") : question;
+
+  await setConversationStage({
+    conversationRef: context.conversationRef,
+    leadRef: context.leadRef,
+    stage: CONVERSATION_STAGES.WAITING_DISCOVERY_REPLY,
+    extra: {
+      missingFields,
+      lastQuestionField: nextField || FieldValue.delete(),
+      lastAskedFields: nextField ? FieldValue.arrayUnion(nextField) : FieldValue.delete()
+    }
+  });
+
+  await sendAndSaveReply({ context, incoming, reply, suffix: `ask-${nextField || "missing"}` });
+  return buildResult(context, reply, CONVERSATION_STAGES.WAITING_DISCOVERY_REPLY, { missingFields });
+}
+
+async function completeBriefAndGenerateLyrics({ context, incoming }) {
+  await setConversationStage({
+    conversationRef: context.conversationRef,
+    leadRef: context.leadRef,
+    stage: CONVERSATION_STAGES.BRIEF_COMPLETE
+  });
+
+  const lock = await lockOrderForLyrics(context.orderRef);
+  if (!lock.locked) {
+    const reply =
+      lock.reason === "lyrics-exist"
+        ? "Ya tienes la letra arriba. ¿La dejamos asi o quieres que cambie algo?"
+        : "Estoy escribiendo tu letra, dame un momento.";
+    await sendAndSaveReply({ context, incoming, reply, suffix: `lyrics-${lock.reason}` });
+    return buildResult(context, reply, context.conversation.stage, { skipped: lock.reason });
+  }
+
+  await setConversationStage({
+    conversationRef: context.conversationRef,
+    leadRef: context.leadRef,
+    stage: CONVERSATION_STAGES.GENERATING_LYRICS
+  });
+
+  try {
+    const song = buildSongForLyrics(context.order, context.lead);
+    const lyrics = await createLyrics(song);
+    const version = Number(context.order.lyricsVersion || 0) + 1;
+
+    await context.orderRef.update({
+      lyrics,
+      lyricsApproved: false,
+      lyricsVersion: version,
+      lyricVersions: FieldValue.arrayUnion({
+        version,
+        lyrics,
+        createdAt: new Date().toISOString(),
+        source: "initial"
+      }),
+      lyricsGenerationLock: FieldValue.delete(),
+      musicStatus: "lyrics_ready",
+      updatedAt: FieldValue.serverTimestamp()
+    });
+
+    await setConversationStage({
+      conversationRef: context.conversationRef,
+      leadRef: context.leadRef,
+      stage: CONVERSATION_STAGES.WAITING_LYRICS_APPROVAL
+    });
+
+    const revisionsLeft = Math.max(0, config.maxLyricsRevisions - getRevisionsUsed(context.order));
+    const reply = buildLyricsApprovalMessage(lyrics, undefined, revisionsLeft);
+    await sendAndSaveReply({ context, incoming, reply, suffix: `lyrics-v${version}` });
+    return buildResult(context, reply, CONVERSATION_STAGES.WAITING_LYRICS_APPROVAL);
+  } catch (error) {
+    await context.orderRef.update({
+      lyricsGenerationLock: FieldValue.delete(),
+      musicStatus: "lyrics_error",
+      lyricsError: error.message,
+      updatedAt: FieldValue.serverTimestamp()
+    });
+    await context.conversationRef.update({
+      lastError: error.message,
+      updatedAt: FieldValue.serverTimestamp()
+    });
+    throw error;
+  }
+}
+
+function isLyricsStage(stage) {
+  return [
+    CONVERSATION_STAGES.WAITING_LYRICS_APPROVAL,
+    CONVERSATION_STAGES.LYRICS_REVISION,
+    CONVERSATION_STAGES.GENERATING_LYRICS
+  ].includes(stage);
+}
+
+function getRevisionsUsed(order = {}) {
+  if (typeof order.lyricsRevisionCount === "number") return order.lyricsRevisionCount;
+  // Pedidos anteriores al contador: la version 1 es la letra inicial.
+  return Math.max(0, Number(order.lyricsVersion || 1) - 1);
+}
+
+/**
+ * Agotadas las correcciones por chat no dejamos al cliente en un bucle: primero
+ * se le ofrece aprobar, y si insiste pasa a un asesor y el bot deja de contestar.
+ */
+async function handleRevisionLimitReached({ context, incoming }) {
+  // Pedir un cambio mas no puede dejar la conversacion parada: se explica la
+  // regla y se produce la muestra con la letra que hay. Un cliente pidio cinco
+  // versiones distintas de una muestra gratuita antes de esto.
+  const reply = [
+    "Para la muestra hacemos un solo cambio y ya lo aplicamos.",
+    "",
+    "Voy a producirla asi para que la escuches cantada. Cuando tengas tu cancion completa ajustamos la letra las veces que haga falta."
+  ].join("\n");
+
+  await context.orderRef.update({
+    lyricsApproved: true,
+    lyricsApprovedAt: FieldValue.serverTimestamp(),
+    musicStatus: "lyrics_approved",
+    revisionLimitNotifiedAt: FieldValue.serverTimestamp(),
+    lyricsRevisionLock: FieldValue.delete(),
+    updatedAt: FieldValue.serverTimestamp()
+  });
+  context.order = { ...context.order, lyricsApproved: true };
+
+  await setConversationStage({
+    conversationRef: context.conversationRef,
+    leadRef: context.leadRef,
+    stage: CONVERSATION_STAGES.PRODUCING_SONG
+  });
+
+  await sendAndSaveReply({ context, incoming, reply, suffix: "revision-limit" });
+  await triggerSongProduction(context);
+
+  return buildResult(context, reply, CONVERSATION_STAGES.PRODUCING_SONG);
+}
+
+async function handleLyricsApprovalIntent({ context, incoming, extraction }) {
+  if (extraction.intent === INTENTS.APPROVE_LYRICS) {
+    await context.orderRef.update({
+      lyricsApproved: true,
+      lyricsApprovedAt: FieldValue.serverTimestamp(),
+      musicStatus: "lyrics_approved",
+      updatedAt: FieldValue.serverTimestamp()
+    });
+    await setConversationStage({
+      conversationRef: context.conversationRef,
+      leadRef: context.leadRef,
+      stage: CONVERSATION_STAGES.PRODUCING_SONG
+    });
+
+    const reply = [
+      "Perfecto, letra aprobada.",
+      "",
+      "Ya estoy produciendo la musica. En unos minutos te mando dos versiones por aqui para que elijas."
+    ].join("\n");
+    await sendAndSaveReply({ context, incoming, reply, suffix: "lyrics-approved" });
+
+    await triggerSongProduction(context);
+
+    return buildResult(context, reply, CONVERSATION_STAGES.PRODUCING_SONG);
+  }
+
+  if (extraction.intent === INTENTS.POSTPONE) {
+    return handlePostpone({ context, incoming });
+  }
+
+  if (extraction.intent === INTENTS.BUYING_SIGNAL) {
+    return handleBuyingSignal({ context, incoming });
+  }
+
+  // Con la letra en pantalla, casi todo lo que escribe el cliente es feedback
+  // sobre ella. Exigir un verbo concreto ("cambia", "ponle") hacia que el
+  // segundo ajuste, pedido con otras palabras, cayera en la respuesta generica
+  // y no cambiara nada: parecia que solo se podia corregir una vez.
+  // "¿No hay una prueba cantada?" no es una correccion: tratarla como tal
+  // reescribia la letra igual que estaba y le gastaba su unico cambio.
+  if (isPlainQuestion(incoming.text)) {
+    const reply = [
+      "La muestra cantada te llega en cuanto apruebes la letra.",
+      "",
+      "¿La dejamos asi y la produzco?"
+    ].join("\n");
+    await sendAndSaveReply({ context, incoming, reply, suffix: "pregunta-letra" });
+    return buildResult(context, reply, CONVERSATION_STAGES.WAITING_LYRICS_APPROVAL);
+  }
+
+  // Su letra es suya: si pide un cambio, lo hace el mismo mandandola de nuevo.
+  if (context.order.lyricsFromClient && isActionableFeedback(incoming.text)) {
+    const reply = [
+      "Como la letra es tuya, prefiero no cambiarte nada.",
+      "",
+      "Mandame la letra corregida y la produzco con esa, o dime si la dejamos como esta."
+    ].join("\n");
+    await sendAndSaveReply({ context, incoming, reply, suffix: "letra-propia-cambio" });
+    return buildResult(context, reply, CONVERSATION_STAGES.WAITING_LYRICS_APPROVAL);
+  }
+
+  if (isActionableFeedback(incoming.text)) {
+    if (getRevisionsUsed(context.order) >= config.maxLyricsRevisions) {
+      return handleRevisionLimitReached({ context, incoming });
+    }
+    return reviseLyricsFromConversation({ context, incoming, extraction });
+  }
+
+  const reply = "¿La letra te gusta asi o quieres que cambie alguna parte?";
+  await sendAndSaveReply({ context, incoming, reply, suffix: "lyrics-followup" });
+  return buildResult(context, reply, CONVERSATION_STAGES.WAITING_LYRICS_APPROVAL);
+}
+
 function buildResult(context, reply, stage, extra = {}) {
   return {
     ok: true,

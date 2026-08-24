@@ -92,7 +92,14 @@ function normalizeExtraction(result, messageText, stage) {
     if (!extractedFields[field]) extractedFields[field] = value;
   }
 
-  const modelIntent = normalizeIntent(result?.intent);
+  let modelIntent = normalizeIntent(result?.intent);
+
+  // El modelo llego a marcar como letra un "Para los hijos / Mis *", y el bot
+  // contesto "recibi tu letra". Que sea una letra lo decide la forma del texto,
+  // no la opinion del modelo.
+  if (modelIntent === INTENTS.OWN_LYRICS && !looksLikeLyrics(messageText)) {
+    modelIntent = INTENTS.PROVIDE_INFORMATION;
+  }
   // Un "ok" o un 👍 pesan mas que lo que el modelo haya decidido: si el cliente
   // aprobo y no lo detectamos, la conversacion se queda esperando para siempre.
   // El modelo clasificaba "Precio?" como pregunta y eso pisaba la lectura de
