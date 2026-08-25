@@ -53,11 +53,14 @@ export async function connectBaileysSession(sessionId = config.baileysSessionId)
       patchSession(session, { phone: state.creds.me.id.split("@")[0] });
     }
 
+    const version = await getWhatsAppWebVersion();
+    console.log("[baileys] usando WhatsApp Web", { sessionId: id, version: version.join(".") });
+
     const sock = makeWASocket({
       auth: state,
       logger,
       printQRInTerminal: false,
-      version: getWhatsAppWebVersion(),
+      version,
       browser: Browsers.macOS("Chrome"),
       generateHighQualityLinkPreview: false,
       markOnlineOnConnect: false

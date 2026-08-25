@@ -14,7 +14,7 @@
   "dependencies": {
     "@ffmpeg-installer/ffmpeg": "latest",
     "axios": "latest",
-    "baileys": "^7.0.0-rc13",
+    "baileys": "^7.0.0-rc14",
     "cors": "latest",
     "dotenv": "latest",
     "express": "latest",
