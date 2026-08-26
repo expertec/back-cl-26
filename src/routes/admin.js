@@ -16,6 +16,7 @@ import { deleteLeadAndData, listKanbanLeads, updateLeadKanbanStage } from "../se
 import { cancelMusic, getMusicOverview, retryMusic } from "../services/adminMonitor.js";
 import { listEvents } from "../services/eventLog.js";
 import { deliverFullSong } from "../services/fullDelivery.js";
+import { deliverSongSamples } from "../services/sampleDelivery.js";
 import { getBotSettings, updateBotSettings } from "../services/botSettings.js";
 import { sendPendingFollowUps } from "../jobs/followUp.js";
 import {
@@ -309,6 +310,18 @@ adminRouter.post("/songs/:musicId/deliver-full", requireRole("admin"), async (re
     return res.json({ ok: true, ...result });
   } catch (error) {
     return res.status(400).json({ ok: false, error: error.message || "No se pudo entregar la cancion." });
+  }
+});
+
+adminRouter.post("/songs/:musicId/deliver-samples", async (req, res) => {
+  try {
+    const result = await deliverSongSamples({
+      musicId: req.params.musicId,
+      actor: req.adminUser
+    });
+    return res.json({ ok: true, ...result });
+  } catch (error) {
+    return res.status(400).json({ ok: false, error: error.message || "No se pudieron enviar las muestras." });
   }
 });
 

@@ -4,9 +4,9 @@ import { sendSongWithVevWhatsapp } from "./vevWhatsappService.js";
 import { sendAudio, sendText } from "./whatsapp/index.js";
 import { logOutboundMedia } from "./conversationLog.js";
 
-export async function sendSongWithWhatsapp(song) {
+export async function sendSongWithWhatsapp(song, options = {}) {
   if (config.whatsappProvider === "baileys") {
-    return sendSongWithBaileys(song);
+    return sendSongWithBaileys(song, options);
   }
 
   if (config.whatsappProvider === "vev") {
@@ -16,8 +16,9 @@ export async function sendSongWithWhatsapp(song) {
   return sendSongWithKanwap(song);
 }
 
-async function sendSongWithBaileys(song) {
+async function sendSongWithBaileys(song, { idempotencySuffix = "" } = {}) {
   const clipUrls = getClipUrls(song);
+  const keySuffix = idempotencySuffix ? `-${idempotencySuffix}` : "";
   const greetingName = song.customerName?.split(" ")[0] || song.recipientName || "";
   const lyricsMessage = [
     greetingName ? `Hola ${greetingName}.` : "Hola.",
@@ -36,7 +37,7 @@ async function sendSongWithBaileys(song) {
   await sendText({
     phone: song.leadPhone,
     message: lyricsMessage,
-    idempotencyKey: `${song.id}-lyrics`
+    idempotencyKey: `${song.id}-lyrics${keySuffix}`
   });
 
   await logOutboundMedia({
@@ -49,7 +50,7 @@ async function sendSongWithBaileys(song) {
   await sendText({
     phone: song.leadPhone,
     message: intro,
-    idempotencyKey: `${song.id}-intro`
+    idempotencyKey: `${song.id}-intro${keySuffix}`
   });
 
   const audioResults = [];
@@ -59,14 +60,14 @@ async function sendSongWithBaileys(song) {
       await sendText({
         phone: song.leadPhone,
         message: `Version ${index + 1}:`,
-        idempotencyKey: `${song.id}-version-${index + 1}-label`
+        idempotencyKey: `${song.id}-version-${index + 1}-label${keySuffix}`
       });
     }
 
     const audioResult = await sendAudio({
       phone: song.leadPhone,
       audioUrl: clipUrl,
-      idempotencyKey: `${song.id}-clip-${index + 1}`
+      idempotencyKey: `${song.id}-clip-${index + 1}${keySuffix}`
     });
 
     await logOutboundMedia({
